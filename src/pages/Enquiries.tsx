@@ -60,6 +60,8 @@ export const Enquiries: React.FC = () => {
   const [newEditSource, setNewEditSource] = useState('')
   const [addingEditInterest, setAddingEditInterest] = useState(false)
   const [newEditInterest, setNewEditInterest] = useState('')
+  const [managingSources, setManagingSources] = useState(false)
+  const [managingInterests, setManagingInterests] = useState(false)
  
   const [panel, setPanel] = useState<HCEnquiry | null>(null)
   const [editForm, setEditForm] = useState<Record<string, string>>({})
@@ -87,8 +89,23 @@ export const Enquiries: React.FC = () => {
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'source').order('sort_order'),
       supabase.from('hc_inventory').select('name').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
     ])
-    setEnquiries((data as HCEnquiry[]) || [])
-    if (srcData && srcData.length > 0) setSources(srcData.map(s => s.value))
+    const enqRecords = (data as HCEnquiry[]) || []
+    setEnquiries(enqRecords)
+ 
+    // Merge sources from settings + sources already used in records
+    const settingsSources = srcData && srcData.length > 0 ? srcData.map(s => s.value) : DEFAULT_SOURCES
+    const recordSources = enqRecords.map(e => e.source).filter(Boolean) as string[]
+    const mergedSources = Array.from(new Set([...settingsSources, ...recordSources]))
+    const missingSources = mergedSources.filter(s => !settingsSources.includes(s))
+    if (missingSources.length > 0 && tenantId) {
+      try {
+        await supabase.from('hc_settings').insert(
+          missingSources.map((s, i) => ({ tenant_id: tenantId, type: 'source', value: s, sort_order: settingsSources.length + i }))
+        )
+      } catch (_) { /* ignore duplicate errors */ }
+    }
+    setSources(mergedSources)
+ 
     if (invData) setInterests(invData.map(i => i.name))
     setLoading(false)
   }, [user, tenantId])
@@ -109,6 +126,18 @@ export const Enquiries: React.FC = () => {
     setInterests(newInterests)
     if (isEdit) { setNewEditInterest(''); setAddingEditInterest(false) }
     else { setNewInterest(''); setAddingInterest(false) }
+  }
+ 
+  const deleteSourceOption = async (val: string) => {
+    if (!tenantId) return
+    await supabase.from('hc_settings').delete().eq('tenant_id', tenantId).eq('type', 'source').eq('value', val)
+    setSources(prev => prev.filter(s => s !== val))
+  }
+ 
+  const deleteInterestOption = async (val: string) => {
+    if (!tenantId) return
+    await supabase.from('hc_inventory').delete().eq('tenant_id', tenantId).eq('name', val)
+    setInterests(prev => prev.filter(i => i !== val))
   }
  
   useEffect(() => { load() }, [load])
@@ -393,7 +422,16 @@ export const Enquiries: React.FC = () => {
     }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Enquiries')
-    XLSX.writeFile(wb, `enquiries-${new Date().toISOString().slice(0, 7)}.xlsx`)
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `enquiries-${new Date().toISOString().slice(0, 7)}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
     showToast(`Exported ${displayed.length} enquiries`)
   }
  
@@ -484,14 +522,9 @@ export const Enquiries: React.FC = () => {
  
             {/* Form fields */}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+              {/* Name */}
               {([
-                ['Name *',        'name',         'text',   'Full name'],
-                ['Enquiry date',  'enquiry_date', 'date',   ''],
-                ['Check-in',      'check_in',     'date',   ''],
-                ['Check-out',     'check_out',    'date',   ''],
-                ['Guests',        'guests',       'number', '1'],
-                ['Total price ₹', 'total_price',  'number', '0'],
-                ['Amount paid ₹', 'amount_paid',  'number', '0'],
+                ['Name *', 'name', 'text', 'Full name'],
               ] as [string,string,string,string][]).map(([l, k, t, p]) => (
                 <div key={k}>
                   <label style={lbl}>{l}</label>
@@ -524,14 +557,64 @@ export const Enquiries: React.FC = () => {
                   onChange={e => setAddForm(f => ({ ...f, email: e.target.value }))} style={inp} />
               </div>
  
+              {/* Interest — dropdown from Inventory */}
+              <div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Interest</label>
+                  <span onClick={() => setManagingInterests(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingInterests ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingInterests ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {interests.map(i => (
+                      <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{i}</span>
+                        <button onClick={() => deleteInterestOption(i)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {interests.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={addForm.interest} onChange={e => setAddForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
+                    <option value="">Select property / package...</option>
+                    {interests.map(i => <option key={i} value={i}>{i}</option>)}
+                    <option value="__add__">+ Add new...</option>
+                  </select>
+                )}
+                {addForm.interest === '__add__' && !managingInterests && (
+                  <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
+                    <input value={newInterest} onChange={e => setNewInterest(e.target.value)} placeholder="e.g. Forest Suite" style={{ ...inp, flex:1 }}
+                      onKeyDown={e => { if (e.key === 'Enter') { addInterestOption(newInterest); setAddForm(f => ({ ...f, interest: newInterest.trim() })) } }} autoFocus />
+                    <button onClick={() => { addInterestOption(newInterest); setAddForm(f => ({ ...f, interest: newInterest.trim() })) }}
+                      style={{ padding:'6px 12px', background:'#17341e', color:'#fff', border:'none', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>Add</button>
+                    <button onClick={() => { setAddingInterest(false); setNewInterest(''); setAddForm(f => ({ ...f, interest: '' })) }}
+                      style={{ padding:'6px 10px', background:'#fff', color:'#6b7280', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>x</button>
+                  </div>
+                )}
+              </div>
+ 
               {/* Source */}
               <div>
-                <label style={lbl}>Source</label>
-                <select value={addForm.source} onChange={e => setAddForm(f => ({ ...f, source: e.target.value }))} style={inp}>
-                  {sources.map(s => <option key={s}>{s}</option>)}
-                  <option value="__add__">+ Add new source...</option>
-                </select>
-                {addForm.source === '__add__' && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Source</label>
+                  <span onClick={() => setManagingSources(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingSources ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingSources ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {sources.map(s => (
+                      <div key={s} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{s}</span>
+                        <button onClick={() => deleteSourceOption(s)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {sources.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={addForm.source} onChange={e => setAddForm(f => ({ ...f, source: e.target.value }))} style={inp}>
+                    {sources.map(s => <option key={s}>{s}</option>)}
+                    <option value="__add__">+ Add new source...</option>
+                  </select>
+                )}
+                {addForm.source === '__add__' && !managingSources && (
                   <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                     <input value={newSource} onChange={e => setNewSource(e.target.value)} placeholder="New source name" style={{ ...inp, flex:1 }}
                       onKeyDown={e => { if (e.key === 'Enter') { addSourceOption(newSource); setAddForm(f => ({ ...f, source: newSource.trim() })) } }} autoFocus />
@@ -543,25 +626,21 @@ export const Enquiries: React.FC = () => {
                 )}
               </div>
  
-              {/* Interest — dropdown from Inventory */}
-              <div>
-                <label style={lbl}>Interest</label>
-                <select value={addForm.interest} onChange={e => setAddForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
-                  <option value="">Select property / package...</option>
-                  {interests.map(i => <option key={i} value={i}>{i}</option>)}
-                  <option value="__add__">+ Add new...</option>
-                </select>
-                {addForm.interest === '__add__' && (
-                  <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
-                    <input value={newInterest} onChange={e => setNewInterest(e.target.value)} placeholder="e.g. Forest Suite" style={{ ...inp, flex:1 }}
-                      onKeyDown={e => { if (e.key === 'Enter') { addInterestOption(newInterest); setAddForm(f => ({ ...f, interest: newInterest.trim() })) } }} autoFocus />
-                    <button onClick={() => { addInterestOption(newInterest); setAddForm(f => ({ ...f, interest: newInterest.trim() })) }}
-                      style={{ padding:'6px 12px', background:'#17341e', color:'#fff', border:'none', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>Add</button>
-                    <button onClick={() => { setAddingInterest(false); setNewInterest(''); setAddForm(f => ({ ...f, interest: '' })) }}
-                      style={{ padding:'6px 10px', background:'#fff', color:'#6b7280', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>x</button>
-                  </div>
-                )}
-              </div>
+              {/* Date and number fields */}
+              {([
+                ['Enquiry date',  'enquiry_date', 'date',   ''],
+                ['Check-in',      'check_in',     'date',   ''],
+                ['Check-out',     'check_out',    'date',   ''],
+                ['Guests',        'guests',       'number', '1'],
+                ['Total price ₹', 'total_price',  'number', '0'],
+                ['Amount paid ₹', 'amount_paid',  'number', '0'],
+              ] as [string,string,string,string][]).map(([l, k, t, p]) => (
+                <div key={k}>
+                  <label style={lbl}>{l}</label>
+                  <input type={t} placeholder={p} value={(addForm as Record<string,string>)[k]}
+                    onChange={e => setAddForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
+                </div>
+              ))}
             </div>
  
             {/* Status */}
@@ -734,12 +813,27 @@ export const Enquiries: React.FC = () => {
                   </div>
                 ))}
                 <div>
-                  <label style={{ ...lbl, color:'#9ca3af' }}>Source</label>
-                  <select value={editForm.source} onChange={e => setEditForm(f => ({ ...f, source: e.target.value }))} style={inp}>
-                    {sources.map(s => <option key={s}>{s}</option>)}
-                    <option value="__add__">+ Add new source...</option>
-                  </select>
-                  {editForm.source === '__add__' && (
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Source</label>
+                    <span onClick={() => setManagingSources(v => !v)} style={{ fontSize:'10px', color:'#9ca3af', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingSources ? 'Done' : 'Manage'}</span>
+                  </div>
+                  {managingSources ? (
+                    <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                      {sources.map(s => (
+                        <div key={s} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                          <span style={{ fontSize:'12px', color:'#374151' }}>{s}</span>
+                          <button onClick={() => deleteSourceOption(s)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                        </div>
+                      ))}
+                      {sources.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                    </div>
+                  ) : (
+                    <select value={editForm.source} onChange={e => setEditForm(f => ({ ...f, source: e.target.value }))} style={inp}>
+                      {sources.map(s => <option key={s}>{s}</option>)}
+                      <option value="__add__">+ Add new source...</option>
+                    </select>
+                  )}
+                  {editForm.source === '__add__' && !managingSources && (
                     <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                       <input value={newEditSource} onChange={e => setNewEditSource(e.target.value)} placeholder="New source" style={{ ...inp, flex:1 }}
                         onKeyDown={e => { if (e.key === 'Enter') { addSourceOption(newEditSource, true); setEditForm(f => ({ ...f, source: newEditSource.trim() })) } }} autoFocus />
@@ -752,13 +846,28 @@ export const Enquiries: React.FC = () => {
                 </div>
  
                 <div>
-                  <label style={{ ...lbl, color:'#9ca3af' }}>Interest</label>
-                  <select value={editForm.interest} onChange={e => setEditForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
-                    <option value="">Select property / package...</option>
-                    {interests.map(i => <option key={i} value={i}>{i}</option>)}
-                    <option value="__add__">+ Add new...</option>
-                  </select>
-                  {editForm.interest === '__add__' && (
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Interest</label>
+                    <span onClick={() => setManagingInterests(v => !v)} style={{ fontSize:'10px', color:'#9ca3af', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingInterests ? 'Done' : 'Manage'}</span>
+                  </div>
+                  {managingInterests ? (
+                    <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                      {interests.map(i => (
+                        <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                          <span style={{ fontSize:'12px', color:'#374151' }}>{i}</span>
+                          <button onClick={() => deleteInterestOption(i)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                        </div>
+                      ))}
+                      {interests.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                    </div>
+                  ) : (
+                    <select value={editForm.interest} onChange={e => setEditForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
+                      <option value="">Select property / package...</option>
+                      {interests.map(i => <option key={i} value={i}>{i}</option>)}
+                      <option value="__add__">+ Add new...</option>
+                    </select>
+                  )}
+                  {editForm.interest === '__add__' && !managingInterests && (
                     <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                       <input value={newEditInterest} onChange={e => setNewEditInterest(e.target.value)} placeholder="e.g. Forest Suite" style={{ ...inp, flex:1 }}
                         onKeyDown={e => { if (e.key === 'Enter') { addInterestOption(newEditInterest, true); setEditForm(f => ({ ...f, interest: newEditInterest.trim() })) } }} autoFocus />

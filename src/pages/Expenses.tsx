@@ -25,6 +25,7 @@ export const Expenses: React.FC = () => {
   const [editForm, setEditForm]   = useState(BLANK)
   const [newCat, setNewCat]       = useState('')
   const [newEditCat, setNewEditCat] = useState('')
+  const [managingCats, setManagingCats] = useState(false)
  
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2800) }
  
@@ -37,14 +38,37 @@ export const Expenses: React.FC = () => {
     else { setNewCat(''); setForm(f => ({ ...f, category: val.trim() })) }
   }
  
+  const deleteCatOption = async (val: string) => {
+    if (!tenantId) return
+    await supabase.from('hc_settings').delete().eq('tenant_id', tenantId).eq('type', 'expense_category').eq('value', val)
+    setCats(prev => prev.filter(c => c !== val))
+  }
+ 
   const load = useCallback(async () => {
     if (!user) return
     const [{ data: exp }, { data: settings }] = await Promise.all([
       supabase.from('hc_finance').select('*').eq('tenant_id', tenantId).eq('type', 'expense').order('date', { ascending: false }),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'expense_category').order('sort_order'),
     ])
-    setRecords((exp as HCFinance[]) || [])
-    if (settings && settings.length > 0) setCats(settings.map(s => s.value))
+    const expRecords = (exp as HCFinance[]) || []
+    setRecords(expRecords)
+ 
+    // Merge: settings cats + cats already used in records (deduplicated)
+    const settingsCats = settings && settings.length > 0 ? settings.map(s => s.value) : DEFAULT_CATS
+    const recordCats = expRecords.map(r => r.category).filter(Boolean) as string[]
+    const merged = Array.from(new Set([...settingsCats, ...recordCats]))
+ 
+    // Seed any missing cats into hc_settings so they appear next time
+    const missing = merged.filter(c => !settingsCats.includes(c))
+    if (missing.length > 0 && tenantId) {
+      try {
+        await supabase.from('hc_settings').insert(
+          missing.map((c, i) => ({ tenant_id: tenantId, type: 'expense_category', value: c, sort_order: settingsCats.length + i }))
+        )
+      } catch (_) { /* ignore duplicate errors */ }
+    }
+ 
+    setCats(merged)
     setLoading(false)
   }, [user])
  
@@ -104,7 +128,16 @@ export const Expenses: React.FC = () => {
     const rows = displayed.map(r => ({ Date: r.date, Description: r.description || '', Category: r.category || '', Amount: r.amount }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Expenses')
-    XLSX.writeFile(wb, `expenses-${new Date().toISOString().slice(0,7)}.xlsx`)
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `expenses-${new Date().toISOString().slice(0, 7)}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
     showToast(`Exported ${displayed.length} expenses`)
   }
  
@@ -147,12 +180,27 @@ export const Expenses: React.FC = () => {
               <div><label style={lbl}>Date *</label><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Amount Rs *</label><input type="number" placeholder="0" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
               <div>
-                <label style={lbl}>Category *</label>
-                <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={inp}>
-                  {cats.map(c => <option key={c}>{c}</option>)}
-                  <option value="__add__">+ Add new...</option>
-                </select>
-                {form.category === '__add__' && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Category *</label>
+                  <span onClick={() => setManagingCats(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingCats ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingCats ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {cats.map(c => (
+                      <div key={c} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{c}</span>
+                        <button onClick={() => deleteCatOption(c)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {cats.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} style={inp}>
+                    {cats.map(c => <option key={c}>{c}</option>)}
+                    <option value="__add__">+ Add new...</option>
+                  </select>
+                )}
+                {form.category === '__add__' && !managingCats && (
                   <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                     <input value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="New category" style={{ ...inp, flex:1 }}
                       onKeyDown={e => { if (e.key === 'Enter') addCatOption(newCat) }} autoFocus />
@@ -221,12 +269,27 @@ export const Expenses: React.FC = () => {
               <div style={{ marginBottom:'12px' }}><label style={lbl}>Date</label><input type="date" value={editForm.date} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
               <div style={{ marginBottom:'12px' }}><label style={lbl}>Amount Rs</label><input type="number" value={editForm.amount} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
               <div style={{ marginBottom:'12px' }}>
-                <label style={lbl}>Category</label>
-                <select value={editForm.category} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))} style={inp}>
-                  {cats.map(c => <option key={c}>{c}</option>)}
-                  <option value="__add__">+ Add new...</option>
-                </select>
-                {editForm.category === '__add__' && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Category</label>
+                  <span onClick={() => setManagingCats(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingCats ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingCats ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {cats.map(c => (
+                      <div key={c} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{c}</span>
+                        <button onClick={() => deleteCatOption(c)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {cats.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={editForm.category} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))} style={inp}>
+                    {cats.map(c => <option key={c}>{c}</option>)}
+                    <option value="__add__">+ Add new...</option>
+                  </select>
+                )}
+                {editForm.category === '__add__' && !managingCats && (
                   <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                     <input value={newEditCat} onChange={e => setNewEditCat(e.target.value)} placeholder="New category" style={{ ...inp, flex:1 }}
                       onKeyDown={e => { if (e.key === 'Enter') addCatOption(newEditCat, true) }} autoFocus />

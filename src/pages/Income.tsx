@@ -148,6 +148,7 @@ export const Income: React.FC = () => {
   const [newPayType, setNewPayType] = useState('')
   const [addingEditPayType, setAddingEditPayType] = useState(false)
   const [newEditPayType, setNewEditPayType] = useState('')
+  const [managingPayTypes, setManagingPayTypes] = useState(false)
   const [editRecord, setEditRecord]   = useState<HCFinance | null>(null)
   const [amountNow, setAmountNow]     = useState('')
   const [editPayType, setEditPayType] = useState('UPI')
@@ -169,9 +170,23 @@ export const Income: React.FC = () => {
       supabase.from('hc_profiles').select('*').eq('id', tenantId).single(),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'payment_type').order('sort_order'),
     ])
-    setRecords((data as HCFinance[]) || [])
+    const incRecords = (data as HCFinance[]) || []
+    setRecords(incRecords)
     setProfile(prof as HCProfile)
-    if (ptData && ptData.length > 0) setPaymentTypes(ptData.map(p => p.value))
+ 
+    // Merge payment types from settings + types already used in records
+    const settingsPT = ptData && ptData.length > 0 ? ptData.map(p => p.value) : DEFAULT_PAYMENT_TYPES
+    const recordPT = incRecords.map(r => r.payment_type).filter(Boolean) as string[]
+    const mergedPT = Array.from(new Set([...settingsPT, ...recordPT]))
+    const missingPT = mergedPT.filter(p => !settingsPT.includes(p))
+    if (missingPT.length > 0 && tenantId) {
+      try {
+        await supabase.from('hc_settings').insert(
+          missingPT.map((p, i) => ({ tenant_id: tenantId, type: 'payment_type', value: p, sort_order: settingsPT.length + i }))
+        )
+      } catch (_) { /* ignore duplicate errors */ }
+    }
+    setPaymentTypes(mergedPT)
     setLoading(false)
   }, [user, tenantId])
  
@@ -182,6 +197,12 @@ export const Income: React.FC = () => {
     setPaymentTypes(updated)
     if (isEdit) { setNewEditPayType(''); setAddingEditPayType(false) }
     else { setNewPayType(''); setAddingPayType(false) }
+  }
+ 
+  const deletePayTypeOption = async (val: string) => {
+    if (!tenantId) return
+    await supabase.from('hc_settings').delete().eq('tenant_id', tenantId).eq('type', 'payment_type').eq('value', val)
+    setPaymentTypes(prev => prev.filter(p => p !== val))
   }
  
   useEffect(() => { load() }, [load])
@@ -284,7 +305,16 @@ export const Income: React.FC = () => {
     }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Income')
-    XLSX.writeFile(wb, `income-${new Date().toISOString().slice(0, 7)}.xlsx`)
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `income-${new Date().toISOString().slice(0, 7)}.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
     showToast(`Exported ${sorted.length} records`)
   }
  
@@ -320,9 +350,7 @@ export const Income: React.FC = () => {
             <option value="">All payment types</option>
             {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
           </select>
-          <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
-            Export Excel
-          </button>
+          <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>
           <button onClick={() => setShowAdd(v => !v)} style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
             + Add income
           </button>
@@ -345,12 +373,27 @@ export const Income: React.FC = () => {
               <div><label style={lbl}>Amount paid Rs</label><input type="number" placeholder="0" value={addForm.amountPaid} onChange={e => setAddForm(f => ({ ...f, amountPaid: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Expected date</label><input type="date" value={addForm.expectedDate} onChange={e => setAddForm(f => ({ ...f, expectedDate: e.target.value }))} style={inp} /></div>
               <div>
-                <label style={lbl}>Payment type</label>
-                <select value={addForm.paymentType} onChange={e => setAddForm(f => ({ ...f, paymentType: e.target.value }))} style={inp}>
-                  {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
-                  <option value="__add__">+ Add new...</option>
-                </select>
-                {addForm.paymentType === '__add__' && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Payment type</label>
+                  <span onClick={() => setManagingPayTypes(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingPayTypes ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingPayTypes ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {paymentTypes.map(pt => (
+                      <div key={pt} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{pt}</span>
+                        <button onClick={() => deletePayTypeOption(pt)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {paymentTypes.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={addForm.paymentType} onChange={e => setAddForm(f => ({ ...f, paymentType: e.target.value }))} style={inp}>
+                    {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
+                    <option value="__add__">+ Add new...</option>
+                  </select>
+                )}
+                {addForm.paymentType === '__add__' && !managingPayTypes && (
                   <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                     <input value={newPayType} onChange={e => setNewPayType(e.target.value)} placeholder="New payment type" style={{ ...inp, flex:1 }}
                       onKeyDown={e => { if (e.key === 'Enter') { addPayTypeOption(newPayType); setAddForm(f => ({ ...f, paymentType: newPayType.trim() })) } }} autoFocus />
@@ -509,12 +552,27 @@ export const Income: React.FC = () => {
               </div>
  
               <div style={{ marginBottom:'12px' }}>
-                <label style={lbl}>Payment type</label>
-                <select value={editPayType} onChange={e => setEditPayType(e.target.value)} style={inp}>
-                  {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
-                  <option value="__add__">+ Add new...</option>
-                </select>
-                {editPayType === '__add__' && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <label style={lbl}>Payment type</label>
+                  <span onClick={() => setManagingPayTypes(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingPayTypes ? 'Done' : 'Manage'}</span>
+                </div>
+                {managingPayTypes ? (
+                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
+                    {paymentTypes.map(pt => (
+                      <div key={pt} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                        <span style={{ fontSize:'12px', color:'#374151' }}>{pt}</span>
+                        <button onClick={() => deletePayTypeOption(pt)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                      </div>
+                    ))}
+                    {paymentTypes.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                  </div>
+                ) : (
+                  <select value={editPayType} onChange={e => setEditPayType(e.target.value)} style={inp}>
+                    {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
+                    <option value="__add__">+ Add new...</option>
+                  </select>
+                )}
+                {editPayType === '__add__' && !managingPayTypes && (
                   <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
                     <input value={newEditPayType} onChange={e => setNewEditPayType(e.target.value)} placeholder="New payment type" style={{ ...inp, flex:1 }}
                       onKeyDown={e => { if (e.key === 'Enter') { addPayTypeOption(newEditPayType, true); setEditPayType(newEditPayType.trim()) } }} autoFocus />
