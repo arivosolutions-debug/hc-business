@@ -116,6 +116,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .maybeSingle()
  
     if (emp) {
+      // Also check if their parent tenant is still active
+      const { data: tenantSub } = await supabase
+        .from('hc_subscribers')
+        .select('is_active, subscription_expires')
+        .eq('auth_user_id', emp.tenant_id)
+        .maybeSingle()
+ 
+      if (tenantSub) {
+        if (!tenantSub.is_active) {
+          setAccessError('Your account has been deactivated. Please contact Hillscamp.')
+          await supabase.auth.signOut()
+          setUser(null); setSession(null); setProfile(null); setSubscriber(null)
+          return
+        }
+        if (tenantSub.subscription_expires) {
+          const expiry = new Date(tenantSub.subscription_expires)
+          if (expiry < new Date()) {
+            setAccessError('Your subscription has expired. Please contact Hillscamp to renew.')
+            await supabase.auth.signOut()
+            setUser(null); setSession(null); setProfile(null); setSubscriber(null)
+            return
+          }
+        }
+      }
+ 
       setEmployee(emp)
       setSubscriber(null)
       return
@@ -145,8 +170,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id)
-      else { setProfile(null); setSubscriber(null); setEmployee(null) }
+      if (session?.user) {
+        setLoading(true)
+        fetchProfile(session.user.id).finally(() => setLoading(false))
+      } else { setProfile(null); setSubscriber(null); setEmployee(null) }
     })
  
     return () => subscription.unsubscribe()

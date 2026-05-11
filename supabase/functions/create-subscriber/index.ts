@@ -25,7 +25,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
  
-    // Create auth user (skip email confirmation)
+    // Create auth user
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
@@ -52,7 +52,16 @@ serve(async (req) => {
       throw new Error(subError.message)
     }
  
-    // Seed default settings for this tenant (tenant_id = userId)
+    // Pre-fill hc_profiles with same details so their settings page is ready
+    await supabaseAdmin.from('hc_profiles').insert({
+      id: userId,
+      business_name,
+      owner_name: owner_name || '',
+      phone: phone || '',
+      is_super_admin: false,
+    })
+ 
+    // Seed default settings
     const defaultCats = ['Electricity', 'Staff Salary', 'Maintenance', 'Food & Supplies', 'Marketing', 'Transport', 'Other']
     const defaultSources = ['WhatsApp DM', 'Instagram DM', 'Website form', 'Phone call', 'Walk-in', 'Referral', 'Other']
     const defaultPayTypes = ['UPI', 'Cash', 'Bank transfer', 'Cheque']
@@ -73,3 +82,4 @@ serve(async (req) => {
     })
   }
 })
+ 

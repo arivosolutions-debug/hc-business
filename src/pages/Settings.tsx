@@ -66,6 +66,16 @@ export const Settings: React.FC = () => {
   const [savingSub, setSavingSub] = useState(false)
   const [createdSub, setCreatedSub] = useState<{ email: string; password: string } | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [editSubId, setEditSubId] = useState<string | null>(null)
+  const [editSubForm, setEditSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'' })
+  const [showEditSubPw, setShowEditSubPw] = useState(false)
+  const [savingEditSub, setSavingEditSub] = useState(false)
+ 
+  // Employee full edit state
+  const [editEmpFullId, setEditEmpFullId] = useState<string | null>(null)
+  const [editEmpFullForm, setEditEmpFullForm] = useState({ name:'', email:'', role:'', password:'' })
+  const [showEditEmpPw, setShowEditEmpPw] = useState(false)
+  const [savingEditEmp, setSavingEditEmp] = useState(false)
  
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2800) }
  
@@ -203,6 +213,62 @@ export const Settings: React.FC = () => {
     }
   }
  
+  const openEditSub = (sub: HCSubscriber) => {
+    setEditSubId(sub.id)
+    setEditSubForm({ business_name: sub.business_name || '', owner_name: sub.owner_name || '', phone: sub.phone || '', email: sub.email || '', password: '' })
+    setShowEditSubPw(false)
+  }
+ 
+  const updateSubscriber = async () => {
+    if (!editSubId) return
+    setSavingEditSub(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/update-subscriber`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ subscriber_id: editSubId, ...editSubForm }),
+      })
+      const result = await res.json()
+      if (!result.success) throw new Error(result.error)
+      setEditSubId(null)
+      loadSubscribers()
+      showToast('Subscriber updated')
+    } catch (err: unknown) {
+      showToast('Error: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setSavingEditSub(false)
+    }
+  }
+ 
+  const openEditEmpFull = (emp: HCEmployee) => {
+    setEditEmpFullId(emp.id)
+    setEditEmpFullForm({ name: emp.name, email: emp.email, role: emp.role_label || '', password: '' })
+    setShowEditEmpPw(false)
+  }
+ 
+  const updateEmployee = async () => {
+    if (!editEmpFullId) return
+    setSavingEditEmp(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/update-employee`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ employee_id: editEmpFullId, ...editEmpFullForm }),
+      })
+      const result = await res.json()
+      if (!result.success) throw new Error(result.error)
+      setEditEmpFullId(null)
+      load()
+      showToast('Employee updated')
+    } catch (err: unknown) {
+      showToast('Error: ' + (err instanceof Error ? err.message : 'Unknown error'))
+    } finally {
+      setSavingEditEmp(false)
+    }
+  }
+ 
   const renderBusiness = () => (
     <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
       <div style={{ fontSize:'14px', fontWeight:500, color:'#111111', marginBottom:'3px' }}>Business profile</div>
@@ -325,8 +391,39 @@ export const Settings: React.FC = () => {
                       Cancel
                     </button>
                   </>
+                ) : editEmpFullId === e.id ? (
+                  <div style={{ width:'100%' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+                      <div><label style={lbl}>Name</label><input value={editEmpFullForm.name} onChange={e2 => setEditEmpFullForm(f => ({ ...f, name: e2.target.value }))} style={inp} /></div>
+                      <div><label style={lbl}>Email</label><input type="email" value={editEmpFullForm.email} onChange={e2 => setEditEmpFullForm(f => ({ ...f, email: e2.target.value }))} style={inp} /></div>
+                      <div><label style={lbl}>Role</label><input value={editEmpFullForm.role} onChange={e2 => setEditEmpFullForm(f => ({ ...f, role: e2.target.value }))} style={inp} /></div>
+                      <div>
+                        <label style={lbl}>New password (optional)</label>
+                        <div style={{ position:'relative' }}>
+                          <input type={showEditEmpPw ? 'text' : 'password'} value={editEmpFullForm.password} onChange={e2 => setEditEmpFullForm(f => ({ ...f, password: e2.target.value }))} placeholder="Leave blank to keep current" style={{ ...inp, paddingRight:'36px' }} />
+                          <button type="button" onClick={() => setShowEditEmpPw(v => !v)} style={{ position:'absolute', right:'8px', top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'#9ca3af', display:'flex', alignItems:'center' }}>
+                            {showEditEmpPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button onClick={updateEmployee} disabled={savingEditEmp}
+                        style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingEditEmp?0.7:1 }}>
+                        {savingEditEmp ? 'Saving...' : 'Save changes'}
+                      </button>
+                      <button onClick={() => setEditEmpFullId(null)}
+                        style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <>
+                    <button onClick={() => openEditEmpFull(e)}
+                      style={{ padding:'7px 16px', background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+                      Edit details
+                    </button>
                     <button onClick={() => openEditPerms(e)}
                       style={{ padding:'7px 16px', background:'#dbeafe', color:'#1e40af', border:'1px solid #93c5fd', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
                       Edit access
@@ -416,25 +513,63 @@ export const Settings: React.FC = () => {
             {subscribers.map(sub => {
               const isActive = sub.is_active !== false
               const isToggling = togglingId === sub.id
+              const isEditingSub = editSubId === sub.id
               return (
-                <div key={sub.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'12px 14px', border:'1px solid #f3f4f6', borderRadius:'10px', background:'#fafafa' }}>
-                  <div style={{ width:'38px', height:'38px', borderRadius:'50%', background: isActive ? '#17341e' : '#e5e7eb', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color: isActive ? '#ffffff' : '#9ca3af', flexShrink:0 }}>
-                    {(sub.business_name || '?')[0].toUpperCase()}
-                  </div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:'13px', fontWeight:500, color: isActive ? '#111111' : '#9ca3af' }}>{sub.business_name || '—'}</div>
-                    <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{sub.owner_name || ''}</div>
-                    <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>
-                      {sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : ''}
+                <div key={sub.id} style={{ border:'1px solid #f3f4f6', borderRadius:'10px', background:'#fafafa', padding:'14px 16px' }}>
+                  {isEditingSub ? (
+                    <div>
+                      <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>Edit subscriber</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+                        <div><label style={lbl}>Business name</label><input value={editSubForm.business_name} onChange={e => setEditSubForm(f => ({ ...f, business_name: e.target.value }))} style={inp} /></div>
+                        <div><label style={lbl}>Owner name</label><input value={editSubForm.owner_name} onChange={e => setEditSubForm(f => ({ ...f, owner_name: e.target.value }))} style={inp} /></div>
+                        <div><label style={lbl}>Phone</label><input value={editSubForm.phone} onChange={e => setEditSubForm(f => ({ ...f, phone: e.target.value }))} style={inp} /></div>
+                        <div><label style={lbl}>Email</label><input type="email" value={editSubForm.email} onChange={e => setEditSubForm(f => ({ ...f, email: e.target.value }))} style={inp} /></div>
+                        <div style={{ gridColumn:'span 2' }}>
+                          <label style={lbl}>New password (optional)</label>
+                          <div style={{ position:'relative' }}>
+                            <input type={showEditSubPw ? 'text' : 'password'} value={editSubForm.password} onChange={e => setEditSubForm(f => ({ ...f, password: e.target.value }))} placeholder="Leave blank to keep current" style={{ ...inp, paddingRight:'36px' }} />
+                            <button type="button" onClick={() => setShowEditSubPw(v => !v)} style={{ position:'absolute', right:'8px', top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'#9ca3af', display:'flex', alignItems:'center' }}>
+                              {showEditSubPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display:'flex', gap:'8px' }}>
+                        <button onClick={updateSubscriber} disabled={savingEditSub}
+                          style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingEditSub?0.7:1 }}>
+                          {savingEditSub ? 'Saving...' : 'Save changes'}
+                        </button>
+                        <button onClick={() => setEditSubId(null)}
+                          style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+                          Cancel
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: isActive ? '#dcfce7' : '#f3f4f6', color: isActive ? '#166534' : '#9ca3af', flexShrink:0 }}>
-                    {isActive ? 'Active' : 'Inactive'}
-                  </span>
-                  <button onClick={() => toggleSubscriber(sub)} disabled={isToggling}
-                    style={{ padding:'7px 14px', background: isActive ? '#fee2e2' : '#dcfce7', color: isActive ? '#991b1b' : '#166534', border:`1px solid ${isActive ? '#fca5a5' : '#86efac'}`, borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:isToggling?0.6:1, flexShrink:0 }}>
-                    {isToggling ? '...' : isActive ? 'Deactivate' : 'Activate'}
-                  </button>
+                  ) : (
+                    <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+                      <div style={{ width:'38px', height:'38px', borderRadius:'50%', background: isActive ? '#17341e' : '#e5e7eb', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color: isActive ? '#ffffff' : '#9ca3af', flexShrink:0 }}>
+                        {(sub.business_name || '?')[0].toUpperCase()}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:'13px', fontWeight:500, color: isActive ? '#111111' : '#9ca3af' }}>{sub.business_name || '—'}</div>
+                        <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{sub.owner_name || ''}</div>
+                        <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>
+                          {sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : ''}
+                        </div>
+                      </div>
+                      <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: isActive ? '#dcfce7' : '#f3f4f6', color: isActive ? '#166534' : '#9ca3af', flexShrink:0 }}>
+                        {isActive ? 'Active' : 'Inactive'}
+                      </span>
+                      <button onClick={() => openEditSub(sub)}
+                        style={{ padding:'7px 14px', background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                        Edit
+                      </button>
+                      <button onClick={() => toggleSubscriber(sub)} disabled={isToggling}
+                        style={{ padding:'7px 14px', background: isActive ? '#fee2e2' : '#dcfce7', color: isActive ? '#991b1b' : '#166534', border:`1px solid ${isActive ? '#fca5a5' : '#86efac'}`, borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:isToggling?0.6:1, flexShrink:0 }}>
+                        {isToggling ? '...' : isActive ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}
