@@ -10,13 +10,34 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
  
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
  
-// ── Profiles ──────────────────────────────────────────────
+// ── Profiles — business settings only ─────────────────────
+// Stores branding/settings configured by the tenant themselves
 export interface HCProfile {
-  id: string; business_name: string | null; owner_name: string | null
-  phone: string | null; address: string | null; gst_number: string | null
-  logo_url: string | null; plan_type: string; is_active: boolean
-  subscription_expires: string | null; onboarding_complete: boolean
-  created_at: string; updated_at: string
+  id: string
+  business_name: string | null
+  owner_name: string | null
+  phone: string | null
+  address: string | null
+  gst_number: string | null
+  logo_url: string | null
+  is_super_admin: boolean
+  created_at: string
+  updated_at: string
+}
+ 
+// ── Subscribers — tenant registry & access control ────────
+// One row per onboarded business. Source of truth for who can log in.
+export interface HCSubscriber {
+  id: string
+  auth_user_id: string
+  business_name: string | null
+  owner_name: string | null
+  email: string | null
+  phone: string | null
+  is_active: boolean
+  subscription_expires: string | null
+  created_at: string
+  updated_at: string
 }
  
 // ── Employees ─────────────────────────────────────────────
@@ -43,9 +64,7 @@ export interface HCInventory {
   created_at: string; updated_at: string
 }
  
-// ── Customers (lean personal info — new table) ────────────
-// One record per unique person, identified by phone number.
-// Auto-created when an enquiry is saved.
+// ── Customers ─────────────────────────────────────────────
 export interface HCCustomer {
   id: string
   tenant_id: string
@@ -54,26 +73,24 @@ export interface HCCustomer {
   email: string | null
   created_at: string
   updated_at: string
-  // populated by join
   enquiry_count?: number
   last_enquiry_date?: string | null
   enquiries?: HCEnquiry[]
 }
  
-// ── Enquiries (was hc_customers — bookings and leads) ─────
-// Every booking or lead enquiry. Linked to a customer record.
+// ── Enquiries ─────────────────────────────────────────────
 export interface HCEnquiry {
   id: string; tenant_id: string
-  customer_id: string | null   // links to hc_customers
+  customer_id: string | null
   name: string
   phone: string | null; email: string | null
   source: string; status: string
   interest: string | null
   check_in: string | null; check_out: string | null
   guests: number
-  enquiry_date: string | null   // when the lead actually contacted you
-  total_price: number | null    // full agreed price
-  amount_paid: number | null    // how much received (single source of truth)
+  enquiry_date: string | null
+  total_price: number | null
+  amount_paid: number | null
   conversation_log: ConversationEntry[]
   notes: string | null
   created_by: string | null; updated_by: string | null
@@ -89,14 +106,13 @@ export interface ConversationEntry {
 export interface HCFinance {
   id: string; tenant_id: string; type: 'income' | 'expense'
   status: 'draft' | 'confirmed'
-  enquiry_id: string | null   // renamed from customer_id
+  enquiry_id: string | null
   advance_paid: number; balance_due: number; expected_date: string | null
   amount: number; description: string | null; category: string | null
   payment_type: string | null; date: string; receipt_number: string | null
   confirmed_at: string | null; confirmed_by: string | null
   created_by: string | null; notes: string | null
   created_at: string; updated_at: string
-  // joined from hc_enquiries
   enquiry?: {
     name: string; phone: string | null
     total_price: number | null; amount_paid: number | null
@@ -115,7 +131,6 @@ export const STATUS_ORDER: Record<string, number> = {
 export const fmt = (n: number | null | undefined) =>
   n ? '₹' + Math.round(n).toLocaleString('en-IN') : '₹0'
  
-// Parse date strings at noon to avoid UTC-midnight timezone off-by-one errors
 const safeDate = (d: string) => new Date(d.length === 10 ? d + 'T12:00:00' : d)
  
 export const fmtDate = (d: string | null | undefined) => {

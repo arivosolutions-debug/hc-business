@@ -12,7 +12,7 @@ serve(async (req) => {
   }
  
   try {
-    const { user_id, action } = await req.json() // action: 'ban' | 'unban'
+    const { user_id, action } = await req.json()
  
     if (!user_id || !action) {
       return new Response(JSON.stringify({ success: false, error: 'user_id and action are required' }), {
@@ -26,12 +26,11 @@ serve(async (req) => {
     )
  
     if (action === 'ban') {
-      // Ban for ~100 years (effectively permanent until manually unbanned)
       await supabaseAdmin.auth.admin.updateUserById(user_id, { ban_duration: '876600h' })
-      await supabaseAdmin.from('hc_profiles').update({ is_active: false }).eq('id', user_id)
+      await supabaseAdmin.from('hc_subscribers').update({ is_active: false }).eq('auth_user_id', user_id)
     } else if (action === 'unban') {
       await supabaseAdmin.auth.admin.updateUserById(user_id, { ban_duration: 'none' })
-      await supabaseAdmin.from('hc_profiles').update({ is_active: true }).eq('id', user_id)
+      await supabaseAdmin.from('hc_subscribers').update({ is_active: true }).eq('auth_user_id', user_id)
     } else {
       throw new Error('Invalid action. Use "ban" or "unban".')
     }
@@ -46,3 +45,4 @@ serve(async (req) => {
     })
   }
 })
+ 

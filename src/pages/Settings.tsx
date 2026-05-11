@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEmployee, HCProfile } from '../lib/supabase'
+import { supabase, HCEmployee, HCProfile, HCSubscriber } from '../lib/supabase'
 import { Eye, EyeOff } from 'lucide-react'
  
 const SUPABASE_URL = 'https://zecuxurmuydzlxsxasxq.supabase.co'
@@ -59,7 +59,7 @@ export const Settings: React.FC = () => {
   const [savingEmpPerms, setSavingEmpPerms] = useState(false)
  
   // Subscriber (onboarding) state
-  const [subscribers, setSubscribers] = useState<(HCProfile & { is_active?: boolean })[]>([])
+  const [subscribers, setSubscribers] = useState<HCSubscriber[]>([])
   const [showAddSub, setShowAddSub] = useState(false)
   const [subForm, setSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'' })
   const [showSubPw, setShowSubPw] = useState(false)
@@ -78,11 +78,10 @@ export const Settings: React.FC = () => {
   const loadSubscribers = useCallback(async () => {
     if (!isSuperAdmin) return
     const { data } = await supabase
-      .from('hc_profiles')
+      .from('hc_subscribers')
       .select('*')
-      .eq('is_super_admin', false)
       .order('created_at', { ascending: false })
-    setSubscribers((data as (HCProfile & { is_active?: boolean })[]) || [])
+    setSubscribers((data as HCSubscriber[]) || [])
   }, [isSuperAdmin])
  
   useEffect(() => {
@@ -183,7 +182,7 @@ export const Settings: React.FC = () => {
     }
   }
  
-  const toggleSubscriber = async (sub: HCProfile & { is_active?: boolean }) => {
+  const toggleSubscriber = async (sub: HCSubscriber) => {
     setTogglingId(sub.id)
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -191,12 +190,12 @@ export const Settings: React.FC = () => {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/toggle-subscriber`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ user_id: sub.id, action }),
+        body: JSON.stringify({ user_id: sub.auth_user_id, action }),
       })
       const result = await res.json()
       if (!result.success) throw new Error(result.error)
       loadSubscribers()
-      showToast(action === 'ban' ? sub.business_name + ' deactivated' : sub.business_name + ' activated')
+      showToast(action === 'ban' ? (sub.business_name || 'Subscriber') + ' deactivated' : (sub.business_name || 'Subscriber') + ' activated')
     } catch (err: unknown) {
       showToast('Error: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {

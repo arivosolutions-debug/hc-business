@@ -36,40 +36,32 @@ serve(async (req) => {
  
     const userId = authData.user.id
  
-    // Create profile row
-    const { error: profileError } = await supabaseAdmin.from('hc_profiles').insert({
-      id: userId,
+    // Insert into hc_subscribers (tenant registry)
+    const { error: subError } = await supabaseAdmin.from('hc_subscribers').insert({
+      auth_user_id: userId,
       business_name,
       owner_name: owner_name || '',
+      email,
       phone: phone || '',
-      onboarding_complete: true,
-      is_super_admin: false,
       is_active: true,
+      subscription_expires: null,
     })
  
-    if (profileError) {
-      // Rollback: delete the auth user if profile creation fails
+    if (subError) {
       await supabaseAdmin.auth.admin.deleteUser(userId)
-      throw new Error(profileError.message)
+      throw new Error(subError.message)
     }
  
-    // Seed default expense categories
+    // Seed default settings for this tenant (tenant_id = userId)
     const defaultCats = ['Electricity', 'Staff Salary', 'Maintenance', 'Food & Supplies', 'Marketing', 'Transport', 'Other']
-    await supabaseAdmin.from('hc_settings').insert(
-      defaultCats.map((cat, i) => ({ tenant_id: userId, type: 'expense_category', value: cat, sort_order: i }))
-    )
- 
-    // Seed default sources
     const defaultSources = ['WhatsApp DM', 'Instagram DM', 'Website form', 'Phone call', 'Walk-in', 'Referral', 'Other']
-    await supabaseAdmin.from('hc_settings').insert(
-      defaultSources.map((src, i) => ({ tenant_id: userId, type: 'source', value: src, sort_order: i }))
-    )
- 
-    // Seed default payment types
     const defaultPayTypes = ['UPI', 'Cash', 'Bank transfer', 'Cheque']
-    await supabaseAdmin.from('hc_settings').insert(
-      defaultPayTypes.map((pt, i) => ({ tenant_id: userId, type: 'payment_type', value: pt, sort_order: i }))
-    )
+ 
+    await supabaseAdmin.from('hc_settings').insert([
+      ...defaultCats.map((cat, i) => ({ tenant_id: userId, type: 'expense_category', value: cat, sort_order: i })),
+      ...defaultSources.map((src, i) => ({ tenant_id: userId, type: 'source', value: src, sort_order: i })),
+      ...defaultPayTypes.map((pt, i) => ({ tenant_id: userId, type: 'payment_type', value: pt, sort_order: i })),
+    ])
  
     return new Response(JSON.stringify({ success: true, user_id: userId }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
