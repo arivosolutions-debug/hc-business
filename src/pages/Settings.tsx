@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEmployee, HCProfile, HCSubscriber } from '../lib/supabase'
+import { supabase, HCEmployee, HCProfile, HCSubscriber, HCInventory } from '../lib/supabase'
 import { Eye, EyeOff } from 'lucide-react'
  
 const SUPABASE_URL = 'https://zecuxurmuydzlxsxasxq.supabase.co'
@@ -40,6 +40,7 @@ export const Settings: React.FC = () => {
  
   const SECTIONS = [
     { id:'business',   label:'Business profile' },
+    { id:'inventory',  label:'Property / Stay' },
     { id:'employees',  label:'Employees' },
     ...(isSuperAdmin ? [{ id:'onboarding', label:'Onboarding' }] : []),
   ]
@@ -57,6 +58,16 @@ export const Settings: React.FC = () => {
   const [editEmpId, setEditEmpId] = useState<string | null>(null)
   const [editEmpPerms, setEditEmpPerms] = useState<Record<string, boolean>>({})
   const [savingEmpPerms, setSavingEmpPerms] = useState(false)
+ 
+  // Inventory state
+  const BLANK_INV = { name:'', type:'stay' as 'stay'|'package'|'other', base_price:'', capacity:'', description:'' }
+  const [inventory, setInventory]     = useState<HCInventory[]>([])
+  const [showAddInv, setShowAddInv]   = useState(false)
+  const [invForm, setInvForm]         = useState(BLANK_INV)
+  const [savingInv, setSavingInv]     = useState(false)
+  const [editInvId, setEditInvId]     = useState<string | null>(null)
+  const [editInvForm, setEditInvForm] = useState(BLANK_INV)
+  const [savingEditInv, setSavingEditInv] = useState(false)
  
   // Subscriber (onboarding) state
   const [subscribers, setSubscribers] = useState<HCSubscriber[]>([])
@@ -269,6 +280,73 @@ export const Settings: React.FC = () => {
     }
   }
  
+ 
+  // ── Inventory functions ──────────────────────────────────
+  const loadInventory = useCallback(async () => {
+    if (!tenantId) return
+    const { data } = await supabase.from('hc_inventory').select('*').eq('tenant_id', tenantId).order('sort_order')
+    setInventory((data as HCInventory[]) || [])
+  }, [tenantId])
+ 
+  useEffect(() => {
+    if (section === 'inventory') loadInventory()
+  }, [section, loadInventory])
+ 
+  const saveInventory = async () => {
+    if (!invForm.name.trim() || !tenantId) { showToast('Name is required'); return }
+    setSavingInv(true)
+    const { error } = await supabase.from('hc_inventory').insert({
+      tenant_id: tenantId,
+      name: invForm.name.trim(),
+      type: invForm.type,
+      base_price: invForm.base_price ? parseFloat(invForm.base_price) : null,
+      capacity: invForm.capacity ? parseInt(invForm.capacity) : null,
+      description: invForm.description || null,
+      is_active: true,
+      sort_order: inventory.length,
+    })
+    setSavingInv(false)
+    if (error) { showToast('Error: ' + error.message); return }
+    setInvForm({ name:'', type:'stay', base_price:'', capacity:'', description:'' })
+    setShowAddInv(false)
+    loadInventory()
+    showToast('Property added')
+  }
+ 
+  const updateInventory = async () => {
+    if (!editInvId || !editInvForm.name.trim()) { showToast('Name is required'); return }
+    setSavingEditInv(true)
+    const { error } = await supabase.from('hc_inventory').update({
+      name: editInvForm.name.trim(),
+      type: editInvForm.type,
+      base_price: editInvForm.base_price ? parseFloat(editInvForm.base_price) : null,
+      capacity: editInvForm.capacity ? parseInt(editInvForm.capacity) : null,
+      description: editInvForm.description || null,
+    }).eq('id', editInvId)
+    setSavingEditInv(false)
+    if (error) { showToast('Error: ' + error.message); return }
+    setEditInvId(null)
+    loadInventory()
+    showToast('Property updated')
+  }
+ 
+  const toggleInventory = async (item: HCInventory) => {
+    await supabase.from('hc_inventory').update({ is_active: !item.is_active }).eq('id', item.id)
+    loadInventory()
+    showToast(item.is_active ? item.name + ' deactivated' : item.name + ' activated')
+  }
+ 
+  const openEditInv = (item: HCInventory) => {
+    setEditInvId(item.id)
+    setEditInvForm({
+      name: item.name,
+      type: item.type,
+      base_price: item.base_price ? String(item.base_price) : '',
+      capacity: item.capacity ? String(item.capacity) : '',
+      description: item.description || '',
+    })
+  }
+ 
   const renderBusiness = () => (
     <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
       <div style={{ fontSize:'14px', fontWeight:500, color:'#111111', marginBottom:'3px' }}>Business profile</div>
@@ -296,6 +374,117 @@ export const Settings: React.FC = () => {
         style={{ padding:'9px 22px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingBiz?0.7:1 }}>
         {savingBiz ? 'Saving...' : 'Save profile'}
       </button>
+    </div>
+  )
+ 
+  const renderInventory = () => (
+    <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'3px' }}>
+        <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>Property / Stay</div>
+        <button onClick={() => { setShowAddInv(v => !v); setEditInvId(null) }}
+          style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+          {showAddInv ? 'Cancel' : '+ Add property'}
+        </button>
+      </div>
+      <div style={{ fontSize:'12px', color:'#9ca3af', marginBottom:'18px' }}>Rooms, stays and packages. These appear in the Interest dropdown across the app.</div>
+ 
+      {showAddInv && (
+        <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'9px', padding:'16px 18px', marginBottom:'16px' }}>
+          <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>New property / stay</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+            <div><label style={lbl}>Name *</label><input placeholder="e.g. Forest Suite" value={invForm.name} onChange={e => setInvForm(f => ({ ...f, name: e.target.value }))} style={inp} /></div>
+            <div>
+              <label style={lbl}>Type</label>
+              <select value={invForm.type} onChange={e => setInvForm(f => ({ ...f, type: e.target.value as 'stay'|'package'|'other' }))} style={inp}>
+                <option value="stay">Stay</option>
+                <option value="package">Package</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div><label style={lbl}>Base price (₹)</label><input type="number" placeholder="0" value={invForm.base_price} onChange={e => setInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
+            <div><label style={lbl}>Capacity (guests)</label><input type="number" placeholder="2" value={invForm.capacity} onChange={e => setInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
+            <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input placeholder="Short description (optional)" value={invForm.description} onChange={e => setInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
+          </div>
+          <div style={{ display:'flex', gap:'8px' }}>
+            <button onClick={saveInventory} disabled={savingInv}
+              style={{ padding:'8px 20px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingInv?0.7:1 }}>
+              {savingInv ? 'Saving...' : 'Add property'}
+            </button>
+            <button onClick={() => setShowAddInv(false)}
+              style={{ padding:'8px 16px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+ 
+      <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+        {inventory.length === 0 && (
+          <div style={{ fontSize:'12px', color:'#9ca3af', textAlign:'center', padding:'20px' }}>No properties added yet.</div>
+        )}
+        {inventory.map(item => {
+          const isEditing = editInvId === item.id
+          return (
+            <div key={item.id} style={{ border:'1px solid #f3f4f6', borderRadius:'10px', background:'#fafafa', padding:'14px 16px' }}>
+              {isEditing ? (
+                <div>
+                  <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>Edit property</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+                    <div><label style={lbl}>Name *</label><input value={editInvForm.name} onChange={e => setEditInvForm(f => ({ ...f, name: e.target.value }))} style={inp} /></div>
+                    <div>
+                      <label style={lbl}>Type</label>
+                      <select value={editInvForm.type} onChange={e => setEditInvForm(f => ({ ...f, type: e.target.value as 'stay'|'package'|'other' }))} style={inp}>
+                        <option value="stay">Stay</option>
+                        <option value="package">Package</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div><label style={lbl}>Base price (₹)</label><input type="number" value={editInvForm.base_price} onChange={e => setEditInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
+                    <div><label style={lbl}>Capacity (guests)</label><input type="number" value={editInvForm.capacity} onChange={e => setEditInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
+                    <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input value={editInvForm.description} onChange={e => setEditInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
+                  </div>
+                  <div style={{ display:'flex', gap:'8px' }}>
+                    <button onClick={updateInventory} disabled={savingEditInv}
+                      style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingEditInv?0.7:1 }}>
+                      {savingEditInv ? 'Saving...' : 'Save changes'}
+                    </button>
+                    <button onClick={() => setEditInvId(null)}
+                      style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+                  <div style={{ width:'38px', height:'38px', borderRadius:'8px', background: item.is_active ? '#17341e' : '#e5e7eb', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color: item.is_active ? '#ffffff' : '#9ca3af', flexShrink:0 }}>
+                    {item.name[0].toUpperCase()}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:'13px', fontWeight:500, color: item.is_active ? '#111111' : '#9ca3af' }}>{item.name}</div>
+                    <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px' }}>
+                      {item.type.charAt(0).toUpperCase() + item.type.slice(1)}
+                      {item.base_price ? ` · ₹${item.base_price.toLocaleString('en-IN')}` : ''}
+                      {item.capacity ? ` · ${item.capacity} guest${item.capacity !== 1 ? 's' : ''}` : ''}
+                    </div>
+                    {item.description && <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{item.description}</div>}
+                  </div>
+                  <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: item.is_active ? '#dcfce7' : '#f3f4f6', color: item.is_active ? '#166534' : '#9ca3af', flexShrink:0 }}>
+                    {item.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                  <button onClick={() => openEditInv(item)}
+                    style={{ padding:'7px 14px', background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                    Edit
+                  </button>
+                  <button onClick={() => toggleInventory(item)}
+                    style={{ padding:'7px 14px', background: item.is_active ? '#fee2e2' : '#dcfce7', color: item.is_active ? '#991b1b' : '#166534', border:`1px solid ${item.is_active ? '#fca5a5' : '#86efac'}`, borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                    {item.is_active ? 'Deactivate' : 'Activate'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
  
@@ -596,6 +785,7 @@ export const Settings: React.FC = () => {
         </div>
         <div style={{ flex:1, overflowY:'auto', padding:'18px 20px' }}>
           {section === 'business'   && renderBusiness()}
+          {section === 'inventory'  && renderInventory()}
           {section === 'employees'  && renderEmployees()}
           {section === 'onboarding' && isSuperAdmin && renderOnboarding()}
         </div>

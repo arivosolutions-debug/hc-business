@@ -106,7 +106,21 @@ export const Enquiries: React.FC = () => {
     }
     setSources(mergedSources)
  
-    if (invData) setInterests(invData.map(i => i.name))
+    // Merge interests from inventory + interests already used in records
+    const invInterests = invData ? invData.map(i => i.name) : []
+    const recordInterests = enqRecords.map(e => e.interest).filter(Boolean) as string[]
+    const mergedInterests = Array.from(new Set([...invInterests, ...recordInterests]))
+    // Only seed truly missing ones — not already in inventory
+    const missingInterests = recordInterests.filter(i => !invInterests.includes(i))
+    if (missingInterests.length > 0 && tenantId) {
+      const uniqueMissing = Array.from(new Set(missingInterests))
+      for (const name of uniqueMissing) {
+        try {
+          await supabase.from('hc_inventory').insert({ tenant_id: tenantId, name, type: 'stay', is_active: true, sort_order: invInterests.length })
+        } catch (_) { /* ignore if already exists */ }
+      }
+    }
+    setInterests(mergedInterests)
     setLoading(false)
   }, [user, tenantId])
  
@@ -410,7 +424,7 @@ export const Enquiries: React.FC = () => {
       Phone:        e.phone || '',
       Email:        e.email || '',
       Source:       e.source,
-      Interest:     e.interest || '',
+      'Property / Stay': e.interest || '',
       'Enquiry date': e.enquiry_date || '',
       'Check-in':   e.check_in || '',
       'Check-out':  e.check_out || '',
@@ -560,7 +574,7 @@ export const Enquiries: React.FC = () => {
               {/* Interest — dropdown from Inventory */}
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <label style={lbl}>Interest</label>
+                  <label style={lbl}>Property / Stay</label>
                   <span onClick={() => setManagingInterests(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingInterests ? 'Done' : 'Manage'}</span>
                 </div>
                 {managingInterests ? (
@@ -707,7 +721,7 @@ export const Enquiries: React.FC = () => {
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
-                    {['Customer','Source','Interest','Enquiry date','Check-in','Check-out','Guests','Total','Paid','Balance','Status',''].map(h => (
+                    {['Customer','Source','Property / Stay','Enquiry date','Check-in','Check-out','Guests','Total','Paid','Balance','Status',''].map(h => (
                       <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -847,7 +861,7 @@ export const Enquiries: React.FC = () => {
  
                 <div>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Interest</label>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Property / Stay</label>
                     <span onClick={() => setManagingInterests(v => !v)} style={{ fontSize:'10px', color:'#9ca3af', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingInterests ? 'Done' : 'Manage'}</span>
                   </div>
                   {managingInterests ? (

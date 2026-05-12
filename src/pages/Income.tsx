@@ -139,6 +139,8 @@ export const Income: React.FC = () => {
   const [loading, setLoading]   = useState(true)
   const [filterMonth, setFilterMonth]     = useState('')
   const [filterPayment, setFilterPayment] = useState('')
+  const [filterInterest, setFilterInterest] = useState('')
+  const [interests, setInterests]         = useState<string[]>([])
   const [currentPage, setCurrentPage]     = useState(1)
   const [showAdd, setShowAdd]   = useState(false)
   const [addForm, setAddForm]   = useState({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
@@ -161,7 +163,7 @@ export const Income: React.FC = () => {
  
   const load = useCallback(async () => {
     if (!user) return
-    const [{ data }, { data: prof }, { data: ptData }] = await Promise.all([
+    const [{ data }, { data: prof }, { data: ptData }, { data: invData }] = await Promise.all([
       supabase.from('hc_finance')
         .select('*, enquiry:hc_enquiries(name, phone, total_price, amount_paid, interest, check_in, check_out, guests)')
         .eq('tenant_id', tenantId)
@@ -169,6 +171,7 @@ export const Income: React.FC = () => {
         .order('date', { ascending: false }),
       supabase.from('hc_profiles').select('*').eq('id', tenantId).single(),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'payment_type').order('sort_order'),
+      supabase.from('hc_inventory').select('name').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
     ])
     const incRecords = (data as HCFinance[]) || []
     setRecords(incRecords)
@@ -187,6 +190,11 @@ export const Income: React.FC = () => {
       } catch (_) { /* ignore duplicate errors */ }
     }
     setPaymentTypes(mergedPT)
+    // Merge interests from inventory + interests already used in income records
+    const invInterests = invData ? invData.map((i: {name: string}) => i.name) : []
+    const recordInterests = incRecords.map((r: any) => r.enquiry?.interest).filter(Boolean) as string[]
+    const mergedInterests = Array.from(new Set([...invInterests, ...recordInterests]))
+    setInterests(mergedInterests)
     setLoading(false)
   }, [user, tenantId])
  
@@ -211,6 +219,7 @@ export const Income: React.FC = () => {
   const filtered = records.filter(r => {
     if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
     if (filterPayment && r.payment_type !== filterPayment) return false
+    if (filterInterest && r.enquiry?.interest !== filterInterest) return false
     return true
   })
  
@@ -295,13 +304,14 @@ export const Income: React.FC = () => {
   const exportExcel = () => {
     if (sorted.length === 0) { showToast('No records to export'); return }
     const rows = sorted.map(r => ({
-      Date:           r.date,
-      Customer:       String(r.enquiry?.name || r.description || ''),
-      'Total':        r.amount || 0,
-      'Amount paid':  r.advance_paid || 0,
-      'Balance':      r.balance_due || 0,
-      'Payment type': r.payment_type || '',
-      Status:         r.status === 'draft' ? 'Draft' : (r.balance_due || 0) === 0 ? 'Paid in full' : 'Part paid',
+      Date:             r.date,
+      Customer:         String(r.enquiry?.name || r.description || ''),
+      'Property / Stay': r.enquiry?.interest || '',
+      'Total':          r.amount || 0,
+      'Amount paid':    r.advance_paid || 0,
+      'Balance':        r.balance_due || 0,
+      'Payment type':   r.payment_type || '',
+      Status:           r.status === 'draft' ? 'Draft' : (r.balance_due || 0) === 0 ? 'Paid in full' : 'Part paid',
     }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Income')
@@ -345,6 +355,10 @@ export const Income: React.FC = () => {
           <select value={filterMonth} onChange={e => { setFilterMonth(e.target.value); setCurrentPage(1) }} style={{ ...sel, width:'130px' }}>
             <option value="">All months</option>
             {MONTHS.map((m, idx) => <option key={m} value={String(idx)}>{m}</option>)}
+          </select>
+          <select value={filterInterest} onChange={e => { setFilterInterest(e.target.value); setCurrentPage(1) }} style={sel}>
+            <option value="">All properties</option>
+            {interests.map(i => <option key={i} value={i}>{i}</option>)}
           </select>
           <select value={filterPayment} onChange={e => { setFilterPayment(e.target.value); setCurrentPage(1) }} style={sel}>
             <option value="">All payment types</option>
@@ -419,17 +433,17 @@ export const Income: React.FC = () => {
             <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading...</div>
           ) : (
             <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'820px' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'980px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
-                    {['Date','Customer','Total','Paid','Balance','Payment type','Status',''].map(h => (
+                    {['Date','Customer','Property / Stay','Total','Paid','Balance','Payment type','Status',''].map(h => (
                       <th key={h} style={{ padding:'11px 16px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.length === 0 ? (
-                    <tr><td colSpan={8} style={{ padding:'32px', textAlign:'center', fontSize:'12px', color:'#9ca3af' }}>No income records yet.</td></tr>
+                    <tr><td colSpan={9} style={{ padding:'32px', textAlign:'center', fontSize:'12px', color:'#9ca3af' }}>No income records yet.</td></tr>
                   ) : paginated.map(r => {
                     const badge    = getStatusBadge(r)
                     const isDraft  = r.status === 'draft'
@@ -441,6 +455,7 @@ export const Income: React.FC = () => {
                         <td style={{ padding:'12px 16px' }}>
                           <div style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>{custName}</div>
                         </td>
+                        <td style={{ padding:'12px 16px', fontSize:'12px', color:'#6b7280', whiteSpace:'nowrap' }}>{r.enquiry?.interest || '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight:500, color:'#111111', whiteSpace:'nowrap' }}>{(r.amount || 0) > 0 ? fmt(r.amount) : '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', color:'#166534', whiteSpace:'nowrap' }}>{(r.advance_paid || 0) > 0 ? fmt(r.advance_paid) : '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight: balance > 0 ? 500 : 400, color: balance > 0 ? '#991b1b' : '#9ca3af', whiteSpace:'nowrap' }}>
