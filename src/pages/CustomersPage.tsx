@@ -54,7 +54,7 @@ export const CustomersPage: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div className="topbar">
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
           <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Customers</span>
           <span style={{ fontSize:'12px', color:'#9ca3af' }}>{customers.length} total</span>
@@ -63,7 +63,7 @@ export const CustomersPage: React.FC = () => {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search by name or phone..."
-          style={{ padding:'7px 12px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#111111', background:'#ffffff', outline:'none', width:'240px' }}
+          className="cust-search" style={{ padding:'7px 12px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#111111', background:'#ffffff', outline:'none' }}
         />
       </div>
  
@@ -75,7 +75,7 @@ export const CustomersPage: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:'14px 20px' }}>
+      <div className="page-content">
         {loading ? (
           <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
         ) : filtered.length === 0 ? (
@@ -143,7 +143,7 @@ export const CustomersPage: React.FC = () => {
                       {cEnqs.length === 0 ? (
                         <div style={{ padding:'16px 18px', fontSize:'12px', color:'#9ca3af' }}>No bookings yet.</div>
                       ) : (
-                        <div style={{ overflowX:'auto' }}>
+                        <div className="table-wrap">
                           <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'600px' }}>
                             <thead>
                               <tr style={{ borderBottom:'1px solid #e5e7eb' }}>

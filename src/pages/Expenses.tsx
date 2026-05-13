@@ -147,12 +147,12 @@ export const Expenses: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div className="topbar">
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
           <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Expenses</span>
           <span style={{ fontSize:'12px', color:'#9ca3af' }}>Total: {fmt(total)}</span>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+        <div className="filter-bar">
           <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...sel, width:'130px' }}>
             <option value="">All months</option>
             {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
@@ -167,7 +167,7 @@ export const Expenses: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:'14px 20px' }}>
+      <div className="page-content">
  
         {/* Add form */}
         {showAdd && (
@@ -176,7 +176,7 @@ export const Expenses: React.FC = () => {
               <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New expense</span>
               <button onClick={() => setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px', marginBottom:'14px' }}>
+            <div className="form-grid-4">
               <div><label style={lbl}>Date *</label><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Amount Rs *</label><input type="number" placeholder="0" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
               <div>
@@ -223,7 +223,7 @@ export const Expenses: React.FC = () => {
         {/* Table */}
         <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
           {loading ? <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading…</div> : (
-            <div style={{ overflowX:'auto' }}>
+            <div className="table-wrap">
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'560px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
@@ -260,7 +260,7 @@ export const Expenses: React.FC = () => {
       {editRecord && (
         <>
           <div onClick={() => setEditRecord(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
-          <div style={{ position:'fixed', top:0, right:0, width:'320px', height:'100%', background:'#ffffff', borderLeft:'1px solid #e5e7eb', display:'flex', flexDirection:'column', zIndex:50 }}>
+          <div className="side-panel" style={{ width:'320px' }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
               <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>Edit expense</div>
               <button onClick={() => setEditRecord(null)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>

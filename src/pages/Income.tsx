@@ -76,7 +76,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:60 }} />
-      <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', background:'#ffffff', borderRadius:'12px', padding:'28px', width:'440px', zIndex:70, maxHeight:'90vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,0.15)' }}>
+      <div className="modal" style={{ padding:'28px', width:'440px', maxHeight:'90vh', overflowY:'auto' }}>
         <div ref={printRef}>
           <div className="biz" style={{ textAlign:'center', borderBottom:'2px solid #17341e', paddingBottom:'16px', marginBottom:'16px' }}>
             {profile?.logo_url && <img src={profile.logo_url} alt="logo" style={{ height:'48px', marginBottom:'8px', display:'block', margin:'0 auto 8px' }} />}
@@ -341,7 +341,7 @@ export const Income: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div className="topbar">
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
           <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Income</span>
           <span style={{ fontSize:'12px', color:'#9ca3af' }}>Confirmed: {fmt(confirmedTotal)}</span>
@@ -372,7 +372,7 @@ export const Income: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:'14px 20px' }}>
+      <div className="page-content">
  
         {/* Manual add form */}
         {showAdd && (
@@ -381,7 +381,7 @@ export const Income: React.FC = () => {
               <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New income entry</span>
               <button onClick={() => setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>x</button>
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'14px' }}>
+            <div className="form-grid">
               <div><label style={lbl}>Description *</label><input placeholder="e.g. Walk-in booking" value={addForm.description} onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Total price Rs *</label><input type="number" placeholder="0" value={addForm.total} onChange={e => setAddForm(f => ({ ...f, total: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Amount paid Rs</label><input type="number" placeholder="0" value={addForm.amountPaid} onChange={e => setAddForm(f => ({ ...f, amountPaid: e.target.value }))} style={inp} /></div>
@@ -436,8 +436,8 @@ export const Income: React.FC = () => {
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'980px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
-                    {['Date','Customer','Property / Stay','Total','Paid','Balance','Payment type','Status',''].map(h => (
-                      <th key={h} style={{ padding:'11px 16px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
+                    {['Date','Customer','Property / Stay','Total','Paid','Balance','Payment type','Status',''].map((h,hi) => (
+                      <th key={h} className={['Paid','Payment type'].includes(h)?'hide-mobile':['Balance'].includes(h)?'hide-tablet':''} style={{ padding:'11px 16px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -512,7 +512,7 @@ export const Income: React.FC = () => {
       {editRecord && (
         <>
           <div onClick={() => setEditRecord(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
-          <div style={{ position:'fixed', top:0, right:0, width:'340px', height:'100%', background:'#ffffff', borderLeft:'1px solid #e5e7eb', display:'flex', flexDirection:'column', zIndex:50 }}>
+          <div className="side-panel" style={{ width:'340px' }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
               <div>
                 <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>{String(editRecord.enquiry?.name || editRecord.description || '')}</div>

@@ -330,10 +330,18 @@ export const Settings: React.FC = () => {
     showToast('Property updated')
   }
  
-  const toggleInventory = async (item: HCInventory) => {
-    await supabase.from('hc_inventory').update({ is_active: !item.is_active }).eq('id', item.id)
+  const deleteInventory = async (item: HCInventory) => {
+    const { count } = await supabase
+      .from('hc_enquiries')
+      .select('*', { count: 'exact', head: true })
+      .eq('tenant_id', tenantId)
+      .eq('interest', item.name)
+    if (count && count > 0) {
+      if (!window.confirm(`"${item.name}" is used in ${count} enquiry record${count > 1 ? 's' : ''}. It will be removed from dropdowns but existing records won't change. Delete anyway?`)) return
+    }
+    await supabase.from('hc_inventory').delete().eq('id', item.id)
     loadInventory()
-    showToast(item.is_active ? item.name + ' deactivated' : item.name + ' activated')
+    showToast(item.name + ' deleted')
   }
  
   const openEditInv = (item: HCInventory) => {
@@ -351,7 +359,7 @@ export const Settings: React.FC = () => {
     <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
       <div style={{ fontSize:'14px', fontWeight:500, color:'#111111', marginBottom:'3px' }}>Business profile</div>
       <div style={{ fontSize:'12px', color:'#9ca3af', marginBottom:'18px' }}>Appears on all receipts and documents.</div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+      <div className="form-grid-2">
         {(['business_name','owner_name','phone','gst_number'] as const).map(k => (
           <div key={k}>
             <label style={lbl}>{k === 'business_name' ? 'Business name' : k === 'owner_name' ? 'Owner name' : k === 'phone' ? 'Phone' : 'GST number'}</label>
@@ -391,7 +399,7 @@ export const Settings: React.FC = () => {
       {showAddInv && (
         <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'9px', padding:'16px 18px', marginBottom:'16px' }}>
           <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>New property / stay</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+          <div className="form-grid-2">
             <div><label style={lbl}>Name *</label><input placeholder="e.g. Forest Suite" value={invForm.name} onChange={e => setInvForm(f => ({ ...f, name: e.target.value }))} style={inp} /></div>
             <div>
               <label style={lbl}>Type</label>
@@ -429,7 +437,7 @@ export const Settings: React.FC = () => {
               {isEditing ? (
                 <div>
                   <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>Edit property</div>
-                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+                  <div className="form-grid-2">
                     <div><label style={lbl}>Name *</label><input value={editInvForm.name} onChange={e => setEditInvForm(f => ({ ...f, name: e.target.value }))} style={inp} /></div>
                     <div>
                       <label style={lbl}>Type</label>
@@ -456,11 +464,11 @@ export const Settings: React.FC = () => {
                 </div>
               ) : (
                 <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-                  <div style={{ width:'38px', height:'38px', borderRadius:'8px', background: item.is_active ? '#17341e' : '#e5e7eb', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color: item.is_active ? '#ffffff' : '#9ca3af', flexShrink:0 }}>
+                  <div style={{ width:'38px', height:'38px', borderRadius:'8px', background:'#17341e', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color:'#ffffff', flexShrink:0 }}>
                     {item.name[0].toUpperCase()}
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:'13px', fontWeight:500, color: item.is_active ? '#111111' : '#9ca3af' }}>{item.name}</div>
+                    <div style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>{item.name}</div>
                     <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px' }}>
                       {item.type.charAt(0).toUpperCase() + item.type.slice(1)}
                       {item.base_price ? ` · ₹${item.base_price.toLocaleString('en-IN')}` : ''}
@@ -468,16 +476,13 @@ export const Settings: React.FC = () => {
                     </div>
                     {item.description && <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{item.description}</div>}
                   </div>
-                  <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: item.is_active ? '#dcfce7' : '#f3f4f6', color: item.is_active ? '#166534' : '#9ca3af', flexShrink:0 }}>
-                    {item.is_active ? 'Active' : 'Inactive'}
-                  </span>
                   <button onClick={() => openEditInv(item)}
                     style={{ padding:'7px 14px', background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
                     Edit
                   </button>
-                  <button onClick={() => toggleInventory(item)}
-                    style={{ padding:'7px 14px', background: item.is_active ? '#fee2e2' : '#dcfce7', color: item.is_active ? '#991b1b' : '#166534', border:`1px solid ${item.is_active ? '#fca5a5' : '#86efac'}`, borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
-                    {item.is_active ? 'Deactivate' : 'Activate'}
+                  <button onClick={() => deleteInventory(item)}
+                    style={{ padding:'7px 14px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                    Delete
                   </button>
                 </div>
               )}
@@ -502,7 +507,7 @@ export const Settings: React.FC = () => {
       {showAddEmp && (
         <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'9px', padding:'16px 18px', marginBottom:'16px' }}>
           <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>New employee</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+          <div className="form-grid-2">
             <div><label style={lbl}>Name *</label><input placeholder="Full name" value={empForm.name} onChange={e => setEmpForm(f => ({ ...f, name: e.target.value }))} style={inp} /></div>
             <div><label style={lbl}>Email *</label><input type="email" placeholder="email@..." value={empForm.email} onChange={e => setEmpForm(f => ({ ...f, email: e.target.value }))} style={inp} /></div>
             <div><label style={lbl}>Password *</label><input type="password" placeholder="Min 6 characters" value={empForm.password} onChange={e => setEmpForm(f => ({ ...f, password: e.target.value }))} style={inp} /></div>
@@ -582,7 +587,7 @@ export const Settings: React.FC = () => {
                   </>
                 ) : editEmpFullId === e.id ? (
                   <div style={{ width:'100%' }}>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+                    <div className="form-grid-2">
                       <div><label style={lbl}>Name</label><input value={editEmpFullForm.name} onChange={e2 => setEditEmpFullForm(f => ({ ...f, name: e2.target.value }))} style={inp} /></div>
                       <div><label style={lbl}>Email</label><input type="email" value={editEmpFullForm.email} onChange={e2 => setEditEmpFullForm(f => ({ ...f, email: e2.target.value }))} style={inp} /></div>
                       <div><label style={lbl}>Role</label><input value={editEmpFullForm.role} onChange={e2 => setEditEmpFullForm(f => ({ ...f, role: e2.target.value }))} style={inp} /></div>
@@ -645,7 +650,7 @@ export const Settings: React.FC = () => {
  
         {showAddSub && (
           <div style={{ marginTop:'16px' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'12px' }}>
+            <div className="form-grid-2">
               <div><label style={lbl}>Business name *</label><input placeholder="e.g. Suelo Tribe" value={subForm.business_name} onChange={e => setSubForm(f => ({ ...f, business_name: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Owner name</label><input placeholder="Owner's full name" value={subForm.owner_name} onChange={e => setSubForm(f => ({ ...f, owner_name: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Phone</label><input placeholder="+91 98470 00000" value={subForm.phone} onChange={e => setSubForm(f => ({ ...f, phone: e.target.value }))} style={inp} /></div>
@@ -677,7 +682,7 @@ export const Settings: React.FC = () => {
         {createdSub && (
           <div style={{ marginTop:'16px', background:'#f0fdf4', border:'1px solid #86efac', borderRadius:'9px', padding:'16px 18px' }}>
             <div style={{ fontSize:'13px', fontWeight:500, color:'#166534', marginBottom:'10px' }}>✓ Account created — share these credentials</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px' }}>
+            <div className="form-grid-2">
               <div>
                 <div style={{ fontSize:'10px', fontWeight:600, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:'4px' }}>Email</div>
                 <div style={{ fontSize:'13px', color:'#111111', fontWeight:500, background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'6px', padding:'7px 10px', userSelect:'all' }}>{createdSub.email}</div>
@@ -708,7 +713,7 @@ export const Settings: React.FC = () => {
                   {isEditingSub ? (
                     <div>
                       <div style={{ fontSize:'13px', fontWeight:500, color:'#111111', marginBottom:'12px' }}>Edit subscriber</div>
-                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+                      <div className="form-grid-2">
                         <div><label style={lbl}>Business name</label><input value={editSubForm.business_name} onChange={e => setEditSubForm(f => ({ ...f, business_name: e.target.value }))} style={inp} /></div>
                         <div><label style={lbl}>Owner name</label><input value={editSubForm.owner_name} onChange={e => setEditSubForm(f => ({ ...f, owner_name: e.target.value }))} style={inp} /></div>
                         <div><label style={lbl}>Phone</label><input value={editSubForm.phone} onChange={e => setEditSubForm(f => ({ ...f, phone: e.target.value }))} style={inp} /></div>
@@ -770,11 +775,11 @@ export const Settings: React.FC = () => {
  
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', flexShrink:0 }}>
+      <div className="topbar" style={{ justifyContent:'flex-start' }}>
         <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Settings</span>
       </div>
-      <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
-        <div style={{ width:'180px', background:'#f9fafb', borderRight:'1px solid #e5e7eb', flexShrink:0, padding:'14px 8px' }}>
+      <div className="settings-body">
+        <div className="settings-sidebar">
           <div style={{ fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.08em', padding:'0 8px', marginBottom:'8px' }}>Settings</div>
           {SECTIONS.map(s => (
             <div key={s.id} onClick={() => setSection(s.id)}
@@ -783,7 +788,7 @@ export const Settings: React.FC = () => {
             </div>
           ))}
         </div>
-        <div style={{ flex:1, overflowY:'auto', padding:'18px 20px' }}>
+        <div className="page-content">
           {section === 'business'   && renderBusiness()}
           {section === 'inventory'  && renderInventory()}
           {section === 'employees'  && renderEmployees()}

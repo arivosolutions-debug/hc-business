@@ -95,7 +95,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   )
  
   return (
-    <div style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
+    <div className="app-root" style={{ display:'flex', height:'100vh', overflow:'hidden' }}>
       <aside style={{ width:'200px', background:'#17341e', display:'flex', flexDirection:'column', flexShrink:0 }} className="hidden-mobile">
         <SidebarContent />
       </aside>

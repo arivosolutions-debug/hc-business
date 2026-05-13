@@ -247,7 +247,7 @@ export const Dashboard: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div className="topbar">
         <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Dashboard</span>
         <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
           <span style={{ fontSize:'11px', color:'#9ca3af' }}>Viewing</span>
@@ -272,13 +272,13 @@ export const Dashboard: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:'16px 20px' }}>
+      <div className="page-content">
         {loading ? (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'200px', color:'#9ca3af', fontSize:'13px' }}>Loading…</div>
         ) : (
           <>
             {/* Today strip */}
-            <div style={{ background:'#17341e', borderRadius:'10px', padding:'18px 20px', display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'20px', marginBottom:'14px' }}>
+            <div className="dash-hero">
               {[
                 { v: stats!.checkIns,     l:`Check-ins — ${filterLabel}`,      c:'#ffffff' },
                 { v: stats!.checkOuts,    l:`Check-outs — ${filterLabel}`,     c:'#ffffff' },
@@ -293,7 +293,7 @@ export const Dashboard: React.FC = () => {
             </div>
  
             {/* KPI cards */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px', marginBottom:'14px' }}>
+            <div className="grid-4" style={{ marginBottom:'14px' }}>
               <KPICard label={`Total leads — ${filterLabel}`}     value={String(stats!.totalLeads)} dot="#3b82f6" />
               <KPICard label={`Conversion — ${filterLabel}`}      value={`${conv}%`}               dot="#22c55e" />
               <KPICard label={`Revenue — ${filterLabel}`}         value={fmt(stats!.revenue)}       dot="#f97316" />
@@ -302,7 +302,7 @@ export const Dashboard: React.FC = () => {
  
             {/* Upcoming 7 days strip */}
             {(stats!.upcomingCheckIns.length > 0 || stats!.upcomingCheckOuts.length > 0) && (
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'14px' }}>
+              <div className="grid-2" style={{ marginBottom:'14px' }}>
  
                 {/* Upcoming check-ins */}
                 <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'14px 16px' }}>
@@ -359,7 +359,7 @@ export const Dashboard: React.FC = () => {
             )}
  
             {/* Charts */}
-            <div style={{ display:'grid', gridTemplateColumns:'3fr 2fr', gap:'12px' }}>
+            <div className="grid-3-2">
  
               <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'16px 18px' }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>

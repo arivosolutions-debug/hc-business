@@ -456,7 +456,7 @@ export const Enquiries: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', padding:'0 22px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <div className="topbar">
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
           <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Enquiries</span>
           <span style={{ fontSize:'12px', color:'#9ca3af' }}>
@@ -498,7 +498,7 @@ export const Enquiries: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ flex:1, overflowY:'auto', padding:'14px 20px' }}>
+      <div className="page-content">
  
         {/* Add form */}
         {showAdd && (
@@ -535,7 +535,7 @@ export const Enquiries: React.FC = () => {
             </div>
  
             {/* Form fields */}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+            <div className="form-grid">
               {/* Name */}
               {([
                 ['Name *', 'name', 'text', 'Full name'],
@@ -691,7 +691,7 @@ export const Enquiries: React.FC = () => {
         {dupCustomer && (
           <>
             <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.3)', zIndex:60 }} />
-            <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', background:'#ffffff', borderRadius:'12px', padding:'24px', width:'360px', zIndex:70, boxShadow:'0 8px 32px rgba(0,0,0,0.12)' }}>
+            <div className="modal" style={{ padding:'24px', width:'360px' }}>
               <div style={{ fontSize:'14px', fontWeight:500, color:'#111111', marginBottom:'8px' }}>Existing customer found</div>
               <div style={{ fontSize:'12px', color:'#6b7280', lineHeight:1.7, marginBottom:'18px' }}>
                 Phone number matches an existing customer:<br />
@@ -717,11 +717,11 @@ export const Enquiries: React.FC = () => {
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
           ) : (
-            <div style={{ overflowX:'auto' }}>
+            <div className="table-wrap">
               <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
-                    {['Customer','Source','Property / Stay','Enquiry date','Check-in','Check-out','Guests','Total','Paid','Balance','Status',''].map(h => (
+                    {['Customer','Source','Property / Stay','Enquiry date','Check-in','Check-out','Guests','Total','Paid','Balance','Status',''].map((h,hi) => (
                       <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
@@ -801,7 +801,7 @@ export const Enquiries: React.FC = () => {
       {panel && (
         <>
           <div onClick={() => setPanel(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
-          <div style={{ position:'fixed', top:0, right:0, width:'340px', height:'100%', background:'#ffffff', borderLeft:'1px solid #e5e7eb', display:'flex', flexDirection:'column', zIndex:50 }}>
+          <div className="side-panel" style={{ width:'340px' }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
               <div>
                 <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>{panel.name}</div>
@@ -811,7 +811,7 @@ export const Enquiries: React.FC = () => {
             </div>
  
             <div style={{ flex:1, overflowY:'auto', padding:'16px 18px' }}>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'14px' }}>
+              <div className="form-grid-2">
                 {([
                   ['Name',         'name',         'text'],
                   ['Phone',        'phone',        'text'],
@@ -897,7 +897,7 @@ export const Enquiries: React.FC = () => {
               {/* Payment section */}
               <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'8px', padding:'12px 14px', marginBottom:'14px' }}>
                 <div style={{ fontSize:'11px', fontWeight:600, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:'10px' }}>Payment</div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px' }}>
+                <div className="form-grid-2">
                   <div>
                     <label style={{ ...lbl, color:'#9ca3af' }}>Total price ₹</label>
                     <input type="number" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
