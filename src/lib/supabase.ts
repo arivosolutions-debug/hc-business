@@ -124,7 +124,7 @@ export interface HCFinance {
  
 // ── Status sort order ─────────────────────────────────────
 export const STATUS_ORDER: Record<string, number> = {
-  new: 1, contacted: 2, booked: 3, completed: 4, noresponse: 5, cancelled: 6,
+  contacted: 1, booked: 2, completed: 3, noresponse: 4, cancelled: 5,
 }
  
 // ── Helpers ───────────────────────────────────────────────
@@ -150,3 +150,4 @@ export const fmtShortDate = (d: string | null | undefined) => {
     })
   } catch { return d }
 }
+ 

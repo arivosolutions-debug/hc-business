@@ -7,7 +7,6 @@ const MONTHS = ['January','February','March','April','May','June','July','August
 const PAGE_SIZE = 50
  
 const STATUS: Record<string, { label: string; bg: string; color: string }> = {
-  new:        { label:'New',         bg:'#dbeafe', color:'#1e40af' },
   contacted:  { label:'Contacted',   bg:'#fef9c3', color:'#854f0b' },
   booked:     { label:'Booked',      bg:'#dcfce7', color:'#166534' },
   completed:  { label:'Completed',   bg:'#d1fae5', color:'#065f46' },
@@ -28,7 +27,7 @@ const Badge = ({ status }: { status: string }) => {
 const rupee = (n: number | null | undefined) => n ? '₹' + Math.round(n).toLocaleString('en-IN') : '—'
  
 const BLANK = () => ({
-  name:'', phone:'', email:'', source:'WhatsApp DM', status:'new',
+  name:'', phone:'', email:'', source:'WhatsApp DM', status:'contacted',
   interest:'', check_in:'', check_out:'', guests:'1',
   total_price:'', amount_paid:'0', notes:'',
   enquiry_date: new Date().toISOString().slice(0, 10),
@@ -52,6 +51,7 @@ export const Enquiries: React.FC = () => {
   // Dynamic options
   const [sources, setSources] = useState<string[]>(DEFAULT_SOURCES)
   const [interests, setInterests] = useState<string[]>([])
+  const [inventoryMap, setInventoryMap] = useState<Record<string, number | null>>({})
   const [addingSource, setAddingSource] = useState(false)
   const [newSource, setNewSource] = useState('')
   const [addingInterest, setAddingInterest] = useState(false)
@@ -87,7 +87,7 @@ export const Enquiries: React.FC = () => {
     const [{ data }, { data: srcData }, { data: invData }] = await Promise.all([
       supabase.from('hc_enquiries').select('*').eq('tenant_id', tenantId).order('enquiry_date', { ascending: false, nullsFirst: false }),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'source').order('sort_order'),
-      supabase.from('hc_inventory').select('name').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
+      supabase.from('hc_inventory').select('name, base_price').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
     ])
     const enqRecords = (data as HCEnquiry[]) || []
     setEnquiries(enqRecords)
@@ -121,6 +121,10 @@ export const Enquiries: React.FC = () => {
       }
     }
     setInterests(mergedInterests)
+    // Build price map for auto-fill
+    const priceMap: Record<string, number | null> = {}
+    if (invData) invData.forEach((i: { name: string; base_price: number | null }) => { priceMap[i.name] = i.base_price })
+    setInventoryMap(priceMap)
     setLoading(false)
   }, [user, tenantId])
  
@@ -332,6 +336,12 @@ export const Enquiries: React.FC = () => {
     const balanceDue  = Math.max(0, totalPrice - amountPaid)
     const wasBooked   = panel.status !== 'booked' && editForm.status === 'booked'
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
+ 
+    // Gate: must enter advance payment amount before marking as Booked
+    if (wasBooked && editForm.amount_paid.trim() === '') {
+      showToast('Please enter advance payment amount (enter 0 if none)')
+      return
+    }
  
     await supabase.from('hc_enquiries').update({
       name:         editForm.name,
@@ -588,7 +598,11 @@ export const Enquiries: React.FC = () => {
                     {interests.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
                   </div>
                 ) : (
-                  <select value={addForm.interest} onChange={e => setAddForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
+                  <select value={addForm.interest} onChange={e => {
+                    const name = e.target.value
+                    const price = inventoryMap[name]
+                    setAddForm(f => ({ ...f, interest: name, ...(price ? { total_price: String(price) } : {}) }))
+                  }} style={inp}>
                     <option value="">Select property / package...</option>
                     {interests.map(i => <option key={i} value={i}>{i}</option>)}
                     <option value="__add__">+ Add new...</option>
@@ -718,7 +732,7 @@ export const Enquiries: React.FC = () => {
             <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
           ) : (
             <div className="table-wrap">
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
+              <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
                     {['Customer','Source','Property / Stay','Enquiry date','Check-in','Check-out','Guests','Total','Paid','Balance','Status',''].map((h,hi) => (
@@ -735,7 +749,7 @@ export const Enquiries: React.FC = () => {
                     const balance = Math.max(0, total - paid)
                     return (
                       <tr key={e.id} style={{ borderBottom:'1px solid #f3f4f6' }}>
-                        <td style={{ padding:'11px 14px' }}>
+                        <td className="sticky-col" style={{ padding:'11px 14px' }}>
                           <div style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>{e.name}</div>
                           <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{e.phone || e.email || '—'}</div>
                         </td>
@@ -875,7 +889,11 @@ export const Enquiries: React.FC = () => {
                       {interests.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
                     </div>
                   ) : (
-                    <select value={editForm.interest} onChange={e => setEditForm(f => ({ ...f, interest: e.target.value }))} style={inp}>
+                    <select value={editForm.interest} onChange={e => {
+                      const name = e.target.value
+                      const price = inventoryMap[name]
+                      setEditForm(f => ({ ...f, interest: name, ...(price && !f.total_price ? { total_price: String(price) } : {}) }))
+                    }} style={inp}>
                       <option value="">Select property / package...</option>
                       {interests.map(i => <option key={i} value={i}>{i}</option>)}
                       <option value="__add__">+ Add new...</option>

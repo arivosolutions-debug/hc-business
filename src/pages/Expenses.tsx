@@ -77,7 +77,7 @@ export const Expenses: React.FC = () => {
   // Filter and sort by date descending
   const displayed = records
     .filter(r => {
-      if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
+      if (filterMonth !== '' && new Date(r.date + 'T12:00:00').getMonth() !== parseInt(filterMonth)) return false
       if (filterCat && r.category !== filterCat) return false
       return true
     })

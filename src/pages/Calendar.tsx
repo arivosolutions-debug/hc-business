@@ -14,6 +14,14 @@ export const Calendar: React.FC = () => {
   const [enquiries, setEnquiries] = useState<HCEnquiry[]>([])
   const [loading,   setLoading]   = useState(true)
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
+  const [filterInterest, setFilterInterest] = useState('')
+  const [interests, setInterests] = useState<string[]>([])
+ 
+  useEffect(() => {
+    if (!tenantId) return
+    supabase.from('hc_inventory').select('name').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order')
+      .then(({ data }) => { if (data) setInterests(data.map(i => i.name)) })
+  }, [tenantId])
  
   const load = useCallback(async () => {
     if (!user) return
@@ -57,8 +65,9 @@ export const Calendar: React.FC = () => {
     return `${viewYear}-${m}-${d}`
   }
  
-  const getCheckIns  = (ds: string) => enquiries.filter(e => e.check_in === ds)
-  const getCheckOuts = (ds: string) => enquiries.filter(e => e.check_out === ds)
+  const filteredEnquiries = filterInterest ? enquiries.filter(e => e.interest === filterInterest) : enquiries
+  const getCheckIns  = (ds: string) => filteredEnquiries.filter(e => e.check_in === ds)
+  const getCheckOuts = (ds: string) => filteredEnquiries.filter(e => e.check_out === ds)
   const todayStr = today.toISOString().slice(0, 10)
  
   const selCheckIns  = selectedDay ? getCheckIns(selectedDay)  : []
@@ -140,6 +149,13 @@ export const Calendar: React.FC = () => {
           <button onClick={nextMonth} style={{ padding:'6px', background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'8px', cursor:'pointer', display:'flex', alignItems:'center', color:'#6b7280' }}><ChevronRight size={16} /></button>
           <button onClick={() => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()) }}
             style={{ padding:'6px 14px', background:'#f3f4f6', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, color:'#374151', cursor:'pointer', marginLeft:'4px' }}>Today</button>
+          {interests.length > 0 && (
+            <select value={filterInterest} onChange={e => setFilterInterest(e.target.value)}
+              style={{ padding:'6px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#374151', background:'#ffffff', outline:'none', cursor:'pointer', marginLeft:'4px' }}>
+              <option value="">All properties</option>
+              {interests.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
+          )}
         </div>
       </div>
  

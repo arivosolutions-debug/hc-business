@@ -60,24 +60,23 @@ input,select,textarea,button{font-family:inherit}
 }
 @media(max-width:768px){
   .filter-bar{
-    flex-wrap:wrap;
+    flex-wrap:nowrap!important;
     padding:8px 12px;
     gap:6px;
-    overflow-x:visible;
+    overflow-x:auto!important;
+    overflow-y:visible;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
   }
+  .filter-bar::-webkit-scrollbar{display:none}
   .filter-bar select,
   .filter-bar input[type="date"]{
-    flex:1 1 140px;
-    min-width:120px;
     font-size:12px!important;
     padding:6px 8px!important;
     height:34px;
-  }
-  .filter-bar .filter-date-group{
-    display:flex;
-    align-items:center;
-    gap:4px;
-    flex:1 1 100%;
+    flex-shrink:0;
+    min-width:100px;
+    max-width:140px;
   }
 }
 @media(min-width:769px) and (max-width:1024px){
@@ -97,6 +96,12 @@ input,select,textarea,button{font-family:inherit}
 @media(max-width:768px){.hide-mobile{display:none!important}}
 .hide-tablet{display:table-cell}
 @media(max-width:1024px){.hide-tablet{display:none!important}}
+ 
+/* Also hide matching td cells on mobile */
+@media(max-width:768px){
+  td.hide-mobile{display:none!important}
+  th.hide-mobile{display:none!important}
+}
  
 /* ── Responsive grids ────────────────────────────────────── */
 .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
@@ -281,3 +286,24 @@ input,select,textarea,button{font-family:inherit}
   .cal-mobile{display:block!important}
 }
  
+/* ── Alternating table rows ──────────────────────────────── */
+.alt-table tbody tr:nth-child(even){background:#f9fafb}
+.alt-table tbody tr:hover{background:#f0fdf4!important}
+ 
+/* ── Sticky first column ─────────────────────────────────── */
+.sticky-col{
+  position:sticky;
+  left:0;
+  background:#ffffff;
+  z-index:2;
+}
+.alt-table tbody tr:nth-child(even) .sticky-col{background:#f9fafb}
+.alt-table tbody tr:hover .sticky-col{background:#f0fdf4!important}
+ 
+/* ── Income topbar landscape fix ────────────────────────── */
+@media(max-width:768px) and (orientation:landscape){
+  .income-topbar-row1{
+    height:auto!important;
+    padding:8px 14px!important;
+  }
+}

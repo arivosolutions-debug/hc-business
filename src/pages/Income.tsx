@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCFinance, HCProfile, fmt, fmtDate } from '../lib/supabase'
 import * as XLSX from 'xlsx'
+import jsPDF from 'jspdf'
  
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const PAGE_SIZE = 50
@@ -55,6 +56,54 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
       + `Thank you for choosing ${bizName}!`
     )
     window.open(`https://wa.me/${phone}?text=${msg}`, '_blank')
+  }
+ 
+ 
+  const handleDownloadPDF = () => {
+    const doc = new jsPDF({ unit: 'mm', format: 'a5' })
+    const biz = profile?.business_name || 'HC Business'
+    const addr = profile?.address || ''
+    const phone = profile?.phone || ''
+    const name = record.enquiry?.name || record.description || '—'
+    const total = record.amount || 0
+    const paid = record.advance_paid || 0
+    const balance = record.balance_due || 0
+    const date = fmtDate(record.date)
+ 
+    doc.setFontSize(16); doc.setFont('helvetica','bold')
+    doc.text(biz, 74, 16, { align:'center' })
+    doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(100)
+    if (addr) doc.text(addr, 74, 22, { align:'center' })
+    if (phone) doc.text(phone, 74, 27, { align:'center' })
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(0)
+    doc.text('RECEIPT', 74, 36, { align:'center' })
+    doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(100)
+    doc.text(date, 74, 41, { align:'center' })
+    doc.setDrawColor(200); doc.line(10, 44, 138, 44)
+    doc.setTextColor(0); doc.setFontSize(10)
+    const rows = [
+      ['Guest name', name],
+      ['Property / Stay', record.enquiry?.interest || '—'],
+      ['Check-in', record.enquiry?.check_in ? new Date(record.enquiry.check_in + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
+      ['Check-out', record.enquiry?.check_out ? new Date(record.enquiry.check_out + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
+      ['Payment type', record.payment_type || '—'],
+      ['Total booking amount', '₹' + Math.round(total).toLocaleString('en-IN')],
+      ['Amount paid', '₹' + Math.round(paid).toLocaleString('en-IN')],
+    ]
+    let y = 52
+    rows.forEach(([label, val]) => {
+      doc.setTextColor(100); doc.text(label, 12, y)
+      doc.setTextColor(0); doc.setFont('helvetica','bold'); doc.text(val, 136, y, { align:'right' })
+      doc.setFont('helvetica','normal')
+      y += 8
+    })
+    doc.setDrawColor(23,52,30); doc.line(10, y, 138, y); y += 6
+    doc.setFontSize(11); doc.setFont('helvetica','bold')
+    doc.text('Balance due', 12, y)
+    doc.setTextColor(balance > 0 ? 153 : 22); doc.text(balance > 0 ? '₹' + Math.round(balance).toLocaleString('en-IN') : 'Fully paid', 136, y, { align:'right' })
+    doc.setTextColor(150); doc.setFontSize(9); doc.setFont('helvetica','normal')
+    doc.text('Thank you for choosing ' + biz + '!', 74, y + 10, { align:'center' })
+    doc.save('receipt-' + name.replace(/\s+/g,'-').toLowerCase() + '.pdf')
   }
  
   const receiptDate = new Date().toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' })
@@ -115,11 +164,14 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
           </div>
         </div>
  
-        <div style={{ display:'flex', gap:'8px', marginTop:'20px' }}>
-          <button onClick={handlePrint} style={{ flex:1, padding:'10px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
-            Print / PDF
+        <div style={{ display:'flex', gap:'8px', marginTop:'20px', flexWrap:'wrap' }}>
+          <button onClick={handlePrint} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+            Print
           </button>
-          <button onClick={handleWhatsApp} style={{ flex:1, padding:'10px', background:'#25d366', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+          <button onClick={handleDownloadPDF} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#1e40af', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+            Download PDF
+          </button>
+          <button onClick={handleWhatsApp} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#25d366', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
             WhatsApp
           </button>
           <button onClick={onClose} style={{ padding:'10px 16px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
@@ -341,33 +393,41 @@ export const Income: React.FC = () => {
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
  
       {/* Topbar */}
-      <div className="topbar">
-        <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
-          <span style={{ fontSize:'15px', fontWeight:500, color:'#111111' }}>Income</span>
-          <span style={{ fontSize:'12px', color:'#9ca3af' }}>Confirmed: {fmt(confirmedTotal)}</span>
-          {drafts.length > 0 && (
-            <span style={{ fontSize:'11px', background:'#fef9c3', color:'#854d0e', padding:'2px 8px', borderRadius:'20px', fontWeight:500 }}>
-              {drafts.length} draft{drafts.length > 1 ? 's' : ''}
+      <div style={{ background:'#ffffff', borderBottom:'1px solid #e5e7eb', flexShrink:0 }}>
+        {/* Row 1: Title + stats + buttons */}
+        <div style={{ padding:'0 16px', height:'52px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:'8px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', minWidth:0, flex:1, overflow:'hidden' }}>
+            <span style={{ fontSize:'15px', fontWeight:500, color:'#111111', flexShrink:0 }}>Income</span>
+            <span style={{ fontSize:'12px', color:'#9ca3af', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              {fmt(confirmedTotal)}
             </span>
-          )}
+            {drafts.length > 0 && (
+              <span style={{ fontSize:'11px', background:'#fef9c3', color:'#854d0e', padding:'2px 8px', borderRadius:'20px', fontWeight:500, flexShrink:0, whiteSpace:'nowrap' }}>
+                {drafts.length} drafts
+              </span>
+            )}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:'6px', flexShrink:0 }}>
+            <button onClick={exportExcel} style={{ padding:'6px 10px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>↓ Excel</button>
+            <button onClick={() => setShowAdd(v => !v)} style={{ padding:'6px 12px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>
+              + Add income
+            </button>
+          </div>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-          <select value={filterMonth} onChange={e => { setFilterMonth(e.target.value); setCurrentPage(1) }} style={{ ...sel, width:'130px' }}>
+        {/* Row 2: Filters - horizontally scrollable */}
+        <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'8px 16px', overflowX:'auto', WebkitOverflowScrolling:'touch', scrollbarWidth:'none', borderTop:'1px solid #f3f4f6' }}>
+          <select value={filterMonth} onChange={e => { setFilterMonth(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
             <option value="">All months</option>
             {MONTHS.map((m, idx) => <option key={m} value={String(idx)}>{m}</option>)}
           </select>
-          <select value={filterInterest} onChange={e => { setFilterInterest(e.target.value); setCurrentPage(1) }} style={sel}>
-            <option value="">All properties</option>
+          <select value={filterInterest} onChange={e => { setFilterInterest(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
+            <option value="">All stays</option>
             {interests.map(i => <option key={i} value={i}>{i}</option>)}
           </select>
-          <select value={filterPayment} onChange={e => { setFilterPayment(e.target.value); setCurrentPage(1) }} style={sel}>
-            <option value="">All payment types</option>
+          <select value={filterPayment} onChange={e => { setFilterPayment(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'110px' }}>
+            <option value="">All payments</option>
             {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
           </select>
-          <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>
-          <button onClick={() => setShowAdd(v => !v)} style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
-            + Add income
-          </button>
         </div>
       </div>
  
@@ -432,12 +492,12 @@ export const Income: React.FC = () => {
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading...</div>
           ) : (
-            <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'980px' }}>
+            <div className="table-wrap">
+              <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'900px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
                     {['Date','Customer','Property / Stay','Total','Paid','Balance','Payment type','Status',''].map((h,hi) => (
-                      <th key={h} className={['Paid','Payment type'].includes(h)?'hide-mobile':['Balance'].includes(h)?'hide-tablet':''} style={{ padding:'11px 16px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
+                      <th key={h} style={{ padding:'11px 16px', textAlign:'left', fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -450,12 +510,12 @@ export const Income: React.FC = () => {
                     const custName = String(r.enquiry?.name || r.description || '—')
                     const balance  = r.balance_due || 0
                     return (
-                      <tr key={r.id} style={{ borderBottom:'1px solid #f3f4f6', background: isDraft ? '#fefce8' : '#ffffff' }}>
+                      <tr key={r.id} style={{ borderBottom:'1px solid #f3f4f6' }}>
                         <td style={{ padding:'12px 16px', fontSize:'12px', color:'#9ca3af', whiteSpace:'nowrap' }}>{fmtDate(r.date)}</td>
-                        <td style={{ padding:'12px 16px' }}>
+                        <td className="sticky-col" style={{ padding:'12px 16px', background: isDraft ? '#fefce8' : undefined }}>
                           <div style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>{custName}</div>
                         </td>
-                        <td style={{ padding:'12px 16px', fontSize:'12px', color:'#6b7280', whiteSpace:'nowrap' }}>{r.enquiry?.interest || '—'}</td>
+                        <td style={{ padding:'12px 16px', fontSize:'12px', color:'#6b7280', whiteSpace:'nowrap', background: isDraft ? '#fefce8' : undefined }}>{r.enquiry?.interest || '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight:500, color:'#111111', whiteSpace:'nowrap' }}>{(r.amount || 0) > 0 ? fmt(r.amount) : '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', color:'#166534', whiteSpace:'nowrap' }}>{(r.advance_paid || 0) > 0 ? fmt(r.advance_paid) : '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight: balance > 0 ? 500 : 400, color: balance > 0 ? '#991b1b' : '#9ca3af', whiteSpace:'nowrap' }}>
@@ -470,9 +530,7 @@ export const Income: React.FC = () => {
                             <button onClick={() => openEdit(r)} style={{ padding:'6px 12px', background:'#dbeafe', color:'#1e40af', border:'1px solid #93c5fd', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
                               Edit
                             </button>
-                            {r.status === 'confirmed' && (
-                              <button onClick={() => setReceiptRec(r)} style={{ padding:'6px 12px', background:'#fef9c3', color:'#854f0b', border:'1px solid #fde047', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Receipt</button>
-                            )}
+                            <button onClick={() => setReceiptRec(r)} style={{ padding:'6px 12px', background:'#fef9c3', color:'#854f0b', border:'1px solid #fde047', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Receipt</button>
                           </div>
                         </td>
                       </tr>
