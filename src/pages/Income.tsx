@@ -43,19 +43,22 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
   }
  
   const handleWhatsApp = () => {
-    const rawPhone = record.enquiry?.phone || ''
-    const phone = rawPhone.replace(/\D/g, '')
+    // 1. Generate and download the PDF
+    handleDownloadPDF()
+    // 2. Open WhatsApp to business phone number (from profile)
+    const bizPhone = (profile?.phone || '').replace(/\D/g, '')
     const bizName = profile?.business_name || 'HC Business'
     const guestName = record.enquiry?.name || record.description || ''
     const msg = encodeURIComponent(
-      `*Receipt — ${bizName}*\n\n`
+      `*Receipt — ${bizName}*\n`
       + `Guest: ${guestName}\n`
-      + `Total: ${fmt(record.amount)}\n`
-      + `Paid: ${fmt(record.advance_paid)}\n`
-      + `Balance: ${fmt(record.balance_due)}\n\n`
-      + `Thank you for choosing ${bizName}!`
+      + `Total: ${fmt(record.amount)} | Paid: ${fmt(record.advance_paid)} | Balance: ${fmt(record.balance_due)}\n\n`
+      + `PDF receipt downloaded — please attach it to this message.`
     )
-    window.open(`https://wa.me/${phone}?text=${msg}`, '_blank')
+    const url = bizPhone
+      ? `https://wa.me/${bizPhone}?text=${msg}`
+      : `https://wa.me/?text=${msg}`
+    setTimeout(() => window.open(url, '_blank'), 500)
   }
  
  
@@ -192,6 +195,7 @@ export const Income: React.FC = () => {
   const [filterMonth, setFilterMonth]     = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterInterest, setFilterInterest] = useState('')
+  const [filterStatus, setFilterStatus]   = useState('')
   const [interests, setInterests]         = useState<string[]>([])
   const [currentPage, setCurrentPage]     = useState(1)
   const [showAdd, setShowAdd]   = useState(false)
@@ -269,15 +273,22 @@ export const Income: React.FC = () => {
  
   // ── Filter ─────────────────────────────────────────────────
   const filtered = records.filter(r => {
-    if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
+    if (filterMonth !== '' && new Date(r.date + 'T12:00:00').getMonth() !== parseInt(filterMonth)) return false
     if (filterPayment && r.payment_type !== filterPayment) return false
     if (filterInterest && r.enquiry?.interest !== filterInterest) return false
+    if (filterStatus === 'draft' && r.status !== 'draft') return false
+    if (filterStatus === 'confirmed' && r.status !== 'confirmed') return false
     return true
   })
  
-  // ── Sort: drafts on top, confirmed at bottom ───────────────
+  // Drafts: ascending by check-in date (soonest first)
+  // Confirmed: descending by payment date (most recent first)
   const sorted: HCFinance[] = [
-    ...filtered.filter(r => r.status === 'draft').sort((a, b) => b.date.localeCompare(a.date)),
+    ...filtered.filter(r => r.status === 'draft').sort((a, b) => {
+      const aDate = a.enquiry?.check_in || a.date
+      const bDate = b.enquiry?.check_in || b.date
+      return aDate.localeCompare(bDate)
+    }),
     ...filtered.filter(r => r.status === 'confirmed').sort((a, b) => b.date.localeCompare(a.date)),
   ]
  
@@ -419,6 +430,11 @@ export const Income: React.FC = () => {
           <select value={filterMonth} onChange={e => { setFilterMonth(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
             <option value="">All months</option>
             {MONTHS.map((m, idx) => <option key={m} value={String(idx)}>{m}</option>)}
+          </select>
+          <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
+            <option value="">All status</option>
+            <option value="draft">Drafts</option>
+            <option value="confirmed">Paid</option>
           </select>
           <select value={filterInterest} onChange={e => { setFilterInterest(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
             <option value="">All stays</option>

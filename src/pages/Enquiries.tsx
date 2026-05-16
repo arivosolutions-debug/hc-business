@@ -731,7 +731,7 @@ export const Enquiries: React.FC = () => {
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
           ) : (
-            <div className="table-wrap">
+            <div className="table-wrap" style={{ overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
               <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
