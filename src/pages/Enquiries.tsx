@@ -178,6 +178,20 @@ export const Enquiries: React.FC = () => {
     const sa = STATUS_ORDER[a.status] || 99
     const sb = STATUS_ORDER[b.status] || 99
     if (sa !== sb) return sa - sb
+    // Within same status, sort differently per status
+    if (a.status === 'booked') {
+      // Soonest check-in first
+      const da = a.check_in || ''
+      const db = b.check_in || ''
+      return da.localeCompare(db)
+    }
+    if (a.status === 'completed') {
+      // Most recent check-out first
+      const da = a.check_out || ''
+      const db = b.check_out || ''
+      return db.localeCompare(da)
+    }
+    // contacted, noresponse, cancelled — newest enquiry date first
     const da = a.enquiry_date || a.created_at
     const db = b.enquiry_date || b.created_at
     return db.localeCompare(da)
@@ -275,13 +289,15 @@ export const Enquiries: React.FC = () => {
  
   const doAddEnquiry = async (customerId: string | null, totalPrice: number, amountPaid: number) => {
     if (!user) return
+    const newId = crypto.randomUUID()
     const entry = {
       date: new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short' }),
       text: addForm.notes || 'Enquiry recorded.',
       added_by: user.id,
     }
-    await supabase.from('hc_enquiries').insert({
-      tenant_id:    user.id,
+    const { error: addErr } = await supabase.from('hc_enquiries').insert({
+      id:           newId,
+      tenant_id:    tenantId,
       customer_id:  customerId,
       name:         addForm.name.trim(),
       phone:        addForm.phone || null,
@@ -291,7 +307,7 @@ export const Enquiries: React.FC = () => {
       interest:     addForm.interest || null,
       check_in:     addForm.check_in || null,
       check_out:    addForm.check_out || null,
-      guests:       parseInt(addForm.guests) || 1,
+      guests:       Math.max(1, parseInt(addForm.guests) || 1),
       total_price:  totalPrice,
       amount_paid:  amountPaid,
       enquiry_date: addForm.enquiry_date || new Date().toISOString().slice(0, 10),
@@ -299,6 +315,24 @@ export const Enquiries: React.FC = () => {
       created_by:   user.id,
       updated_by:   user.id,
     })
+ 
+    // If added directly as booked, create draft income (trigger only fires on UPDATE)
+    if (!addErr && addForm.status === 'booked') {
+      const { error: finErr } = await supabase.from('hc_finance').insert({
+        tenant_id:    tenantId,
+        type:         'income',
+        status:       totalPrice > 0 && amountPaid >= totalPrice ? 'confirmed' : 'draft',
+        enquiry_id:   newId,
+        amount:       totalPrice,
+        advance_paid: amountPaid,
+        balance_due:  Math.max(0, totalPrice - amountPaid),
+        date:         new Date().toISOString().slice(0, 10),
+        description:  addForm.name.trim() + ' booking',
+        created_by:   user.id,
+      })
+      if (finErr) console.error('Finance insert error:', finErr)
+    }
+ 
     setSaving(false)
     setAddForm(BLANK())
     setShowAdd(false)
@@ -343,7 +377,7 @@ export const Enquiries: React.FC = () => {
       return
     }
  
-    await supabase.from('hc_enquiries').update({
+    const { error: enqErr } = await supabase.from('hc_enquiries').update({
       name:         editForm.name,
       phone:        editForm.phone || null,
       email:        editForm.email || null,
@@ -352,7 +386,7 @@ export const Enquiries: React.FC = () => {
       interest:     editForm.interest || null,
       check_in:     editForm.check_in || null,
       check_out:    editForm.check_out || null,
-      guests:       parseInt(editForm.guests) || 1,
+      guests:       Math.max(1, parseInt(editForm.guests) || 1),
       total_price:  totalPrice,
       amount_paid:  amountPaid,
       enquiry_date: editForm.enquiry_date || null,
@@ -360,40 +394,29 @@ export const Enquiries: React.FC = () => {
       updated_at:   new Date().toISOString(),
     }).eq('id', panel.id)
  
+    if (enqErr) {
+      console.error('Enquiry update error:', enqErr)
+      showToast('Error updating enquiry: ' + enqErr.message)
+      return
+    }
+ 
     // Handle income draft
-    const { data: existingDrafts } = await supabase
-      .from('hc_finance')
-      .select('id')
-      .eq('tenant_id', panel.tenant_id)
-      .eq('enquiry_id', panel.id)
-      .eq('type', 'income')
-      .eq('status', 'draft')
+    // Draft income is auto-created by hc_on_customer_booked trigger
+    // Update existing draft if amounts changed on a re-save
+    const { data: existingDraft } = await supabase
+      .from('hc_finance').select('id')
+      .eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id)
+      .eq('type', 'income').eq('status', 'draft').maybeSingle()
  
     if (wasBooked) {
-      if (!existingDrafts || existingDrafts.length === 0) {
-        await supabase.from('hc_finance').insert({
-          tenant_id:   panel.tenant_id,
-          type:        'income',
-          status:      isFullyPaid ? 'confirmed' : 'draft',
-          enquiry_id:  panel.id,
-          amount:      totalPrice,
-          advance_paid: amountPaid,
-          balance_due:  balanceDue,
-          date:         editForm.check_in || new Date().toISOString().slice(0, 10),
-          description:  `${panel.name} booking`,
-          created_by:   user.id,
-          ...(isFullyPaid ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
-        })
-        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Saved · Draft income created')
-      } else {
-        await supabase.from('hc_finance').update({
-          amount:       totalPrice,
-          advance_paid: amountPaid,
-          balance_due:  balanceDue,
-          ...(isFullyPaid ? { status:'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
-        }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
-        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Changes saved · Draft income updated')
-      }
+      showToast('Saved · Draft income created')
+    } else if (existingDraft) {
+      await supabase.from('hc_finance').update({
+        amount:       totalPrice,
+        advance_paid: amountPaid,
+        balance_due:  balanceDue,
+      }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
+      showToast('Changes saved · Draft income updated')
     } else {
       showToast('Changes saved')
     }
@@ -508,7 +531,7 @@ export const Enquiries: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div className="page-content">
+      <div style={{ padding:"14px 20px 0 20px" }}>
  
         {/* Add form */}
         {showAdd && (
@@ -725,13 +748,13 @@ export const Enquiries: React.FC = () => {
             </div>
           </>
         )}
+      </div>
  
         {/* Table */}
-        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
+        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
           ) : (
-            <div className="table-wrap" style={{ overflowX:'auto', WebkitOverflowScrolling:'touch' }}>
               <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
@@ -784,11 +807,11 @@ export const Enquiries: React.FC = () => {
                   })}
                 </tbody>
               </table>
-            </div>
           )}
         </div>
  
         {/* Pagination */}
+      <div style={{ padding:"0 20px" }}>
         {totalPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 4px', marginTop:'10px' }}>
             <span style={{ fontSize:'12px', color:'#9ca3af' }}>

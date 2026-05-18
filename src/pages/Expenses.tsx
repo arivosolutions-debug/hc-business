@@ -167,7 +167,7 @@ export const Expenses: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div className="page-content">
+      <div style={{ padding:"14px 20px 0 20px" }}>
  
         {/* Add form */}
         {showAdd && (
@@ -219,12 +219,12 @@ export const Expenses: React.FC = () => {
             </div>
           </div>
         )}
+      </div>
  
         {/* Table */}
-        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
+        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
           {loading ? <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading…</div> : (
-            <div className="table-wrap">
-              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'560px' }}>
+              <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'560px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
                     {['Date','Description','Category','Amount',''].map(h => (
@@ -251,10 +251,8 @@ export const Expenses: React.FC = () => {
                     ))}
                 </tbody>
               </table>
-            </div>
           )}
         </div>
-      </div>
  
       {/* Edit panel */}
       {editRecord && (

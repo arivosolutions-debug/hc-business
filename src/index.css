@@ -89,7 +89,7 @@ input,select,textarea,button{font-family:inherit}
 @media(min-width:769px) and (max-width:1024px){.page-content{padding:12px 16px}}
  
 /* ── Table scroll wrapper ────────────────────────────────── */
-.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.table-wrap{overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch}
  
 /* ── Hide/show by breakpoint ─────────────────────────────── */
 .hide-mobile{display:table-cell}
@@ -306,4 +306,18 @@ input,select,textarea,button{font-family:inherit}
     height:auto!important;
     padding:8px 14px!important;
   }
+}
+/* ── Sticky table headers ────────────────────────────────── */
+.alt-table thead th {
+  position: sticky;
+  top: 0;
+  background: #f9fafb;
+  z-index: 3;
+  border-bottom: 2px solid #e5e7eb;
+}
+/* table-wrap must NOT clip vertical stickiness */
+.table-wrap {
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
 }

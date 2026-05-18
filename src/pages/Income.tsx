@@ -307,6 +307,14 @@ export const Income: React.FC = () => {
   const isFullyPaid  = totalPrice > 0 && newPaid >= totalPrice
   const exceedsMax   = amountNow !== '' && amountNowNum > trueBalance
  
+  const deleteIncome = async (r: HCFinance) => {
+    const label = r.enquiry?.name || r.description || 'this record'
+    if (!window.confirm(`Delete income record for "${label}"? This cannot be undone.`)) return
+    await supabase.from('hc_finance').delete().eq('id', r.id)
+    load()
+    showToast('Income record deleted')
+  }
+ 
   const openEdit = (r: HCFinance) => {
     setEditRecord(r)
     setAmountNow('')
@@ -448,7 +456,7 @@ export const Income: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div className="page-content">
+      <div style={{ padding:"14px 20px 0 20px" }}>
  
         {/* Manual add form */}
         {showAdd && (
@@ -502,13 +510,13 @@ export const Income: React.FC = () => {
             </div>
           </div>
         )}
+      </div>
  
         {/* Table */}
-        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
+        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading...</div>
           ) : (
-            <div className="table-wrap">
               <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'900px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
@@ -547,6 +555,7 @@ export const Income: React.FC = () => {
                               Edit
                             </button>
                             <button onClick={() => setReceiptRec(r)} style={{ padding:'6px 12px', background:'#fef9c3', color:'#854f0b', border:'1px solid #fde047', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Receipt</button>
+                            <button onClick={() => deleteIncome(r)} style={{ padding:'6px 12px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Delete</button>
                           </div>
                         </td>
                       </tr>
@@ -554,11 +563,11 @@ export const Income: React.FC = () => {
                   })}
                 </tbody>
               </table>
-            </div>
           )}
         </div>
  
         {/* Pagination */}
+      <div style={{ padding:"0 20px" }}>
         {totalPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 4px', marginTop:'10px' }}>
             <span style={{ fontSize:'12px', color:'#9ca3af' }}>
