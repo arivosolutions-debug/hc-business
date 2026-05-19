@@ -34,6 +34,13 @@ export const CustomersPage: React.FC = () => {
  
   useEffect(() => { load() }, [load])
  
+  const deleteCustomer = async (c: HCCustomer) => {
+    const msg = 'Delete customer "' + c.name + '"? This cannot be undone.'
+    if (!window.confirm(msg)) return
+    await supabase.from('hc_customers').delete().eq('id', c.id)
+    load()
+  }
+
   // Get all enquiries for a customer — match by customer_id or phone number
   const getEnquiries = (c: HCCustomer) => {
     return enquiries.filter(e =>
@@ -96,44 +103,45 @@ export const CustomersPage: React.FC = () => {
                   {/* Customer header row */}
                   <div
                     onClick={() => setExpanded(isExpanded ? null : c.id)}
-                    style={{ padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:'14px' }}
+                    style={{ padding:'14px 18px', cursor:'pointer' }}
                   >
-                    {/* Avatar */}
-                    <div style={{ width:'38px', height:'38px', borderRadius:'50%', background:'#17341e', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:500, color:'#ffffff', flexShrink:0 }}>
-                      {c.name[0].toUpperCase()}
-                    </div>
- 
-                    {/* Info */}
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>{c.name}</div>
-                      <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px' }}>
-                        {c.phone || '—'}{c.email ? ` · ${c.email}` : ''}
+                    <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+                      {/* Avatar */}
+                      <div style={{ width:'36px', height:'36px', borderRadius:'50%', background:'#17341e', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'14px', fontWeight:500, color:'#ffffff', flexShrink:0 }}>
+                        {c.name[0].toUpperCase()}
                       </div>
-                    </div>
- 
-                    {/* Stats */}
-                    <div style={{ display:'flex', gap:'20px', alignItems:'center', flexShrink:0 }}>
-                      <div style={{ textAlign:'center' }}>
-                        <div style={{ fontSize:'16px', fontWeight:500, color:'#111111' }}>{cEnqs.length}</div>
-                        <div style={{ fontSize:'10px', color:'#9ca3af' }}>Booking{cEnqs.length !== 1 ? 's' : ''}</div>
+                      {/* Info */}
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>{c.name}</div>
+                        <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                          {c.phone || '—'}{c.email ? ` · ${c.email}` : ''}
+                        </div>
                       </div>
-                      {totalSpend > 0 && (
-                        <div style={{ textAlign:'center' }}>
-                          <div style={{ fontSize:'14px', fontWeight:500, color:'#17341e' }}>{rupee(totalSpend)}</div>
-                          <div style={{ fontSize:'10px', color:'#9ca3af' }}>Total spend</div>
-                        </div>
-                      )}
-                      {lastEnq && (
-                        <div style={{ textAlign:'right' }}>
-                          <div style={{ fontSize:'11px', fontWeight:500, color:'#374151' }}>
-                            {lastEnq.enquiry_date ? new Date(lastEnq.enquiry_date).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : fmtDate(lastEnq.created_at)}
-                          </div>
-                          <div style={{ fontSize:'10px', color:'#9ca3af' }}>Last enquiry</div>
-                        </div>
-                      )}
-                      <div style={{ fontSize:'18px', color:'#9ca3af', width:'20px', textAlign:'center' }}>
+                      {/* Actions */}
+                      <button
+                        onClick={e => { e.stopPropagation(); deleteCustomer(c) }}
+                        style={{ padding:'4px 10px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'6px', fontSize:'10px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                        Delete
+                      </button>
+                      <div style={{ fontSize:'16px', color:'#9ca3af', flexShrink:0 }}>
                         {isExpanded ? '▲' : '▼'}
                       </div>
+                    </div>
+                    {/* Stats row */}
+                    <div style={{ display:'flex', gap:'16px', marginTop:'8px', marginLeft:'48px', flexWrap:'wrap' }}>
+                      <span style={{ fontSize:'11px', color:'#6b7280' }}>
+                        <strong style={{ color:'#111111' }}>{cEnqs.length}</strong> booking{cEnqs.length !== 1 ? 's' : ''}
+                      </span>
+                      {totalSpend > 0 && (
+                        <span style={{ fontSize:'11px', color:'#6b7280' }}>
+                          <strong style={{ color:'#17341e' }}>{rupee(totalSpend)}</strong> total
+                        </span>
+                      )}
+                      {lastEnq && (
+                        <span style={{ fontSize:'11px', color:'#9ca3af' }}>
+                          Last: {lastEnq.enquiry_date ? new Date(lastEnq.enquiry_date).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : fmtDate(lastEnq.created_at)}
+                        </span>
+                      )}
                     </div>
                   </div>
  
