@@ -178,20 +178,14 @@ export const Enquiries: React.FC = () => {
     const sa = STATUS_ORDER[a.status] || 99
     const sb = STATUS_ORDER[b.status] || 99
     if (sa !== sb) return sa - sb
-    // Within same status, sort differently per status
     if (a.status === 'booked') {
-      // Soonest check-in first
-      const da = a.check_in || ''
-      const db = b.check_in || ''
+      const da = a.check_in || ''; const db = b.check_in || ''
       return da.localeCompare(db)
     }
     if (a.status === 'completed') {
-      // Most recent check-out first
-      const da = a.check_out || ''
-      const db = b.check_out || ''
+      const da = a.check_out || ''; const db = b.check_out || ''
       return db.localeCompare(da)
     }
-    // contacted, noresponse, cancelled — newest enquiry date first
     const da = a.enquiry_date || a.created_at
     const db = b.enquiry_date || b.created_at
     return db.localeCompare(da)
@@ -266,8 +260,8 @@ export const Enquiries: React.FC = () => {
     if (!user || !addForm.name.trim()) { showToast('Name is required'); return }
     setSaving(true)
  
-    const totalPrice = parseFloat(addForm.total_price) || 0
-    const amountPaid = parseFloat(addForm.amount_paid) || 0
+    const totalPrice = Math.max(0, parseFloat(addForm.total_price) || 0)
+    const amountPaid = Math.max(0, parseFloat(addForm.amount_paid) || 0)
  
     const { customerId, isExisting, existingCustomer } = await resolveCustomer(
       addForm.name, addForm.phone, addForm.email
@@ -289,12 +283,12 @@ export const Enquiries: React.FC = () => {
  
   const doAddEnquiry = async (customerId: string | null, totalPrice: number, amountPaid: number) => {
     if (!user) return
-    const newId = crypto.randomUUID()
     const entry = {
       date: new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short' }),
       text: addForm.notes || 'Enquiry recorded.',
       added_by: user.id,
     }
+    const newId = crypto.randomUUID()
     const { error: addErr } = await supabase.from('hc_enquiries').insert({
       id:           newId,
       tenant_id:    tenantId,
@@ -315,24 +309,18 @@ export const Enquiries: React.FC = () => {
       created_by:   user.id,
       updated_by:   user.id,
     })
- 
-    // If added directly as booked, create draft income (trigger only fires on UPDATE)
     if (!addErr && addForm.status === 'booked') {
+      const finId = crypto.randomUUID()
       const { error: finErr } = await supabase.from('hc_finance').insert({
-        tenant_id:    tenantId,
-        type:         'income',
-        status:       totalPrice > 0 && amountPaid >= totalPrice ? 'confirmed' : 'draft',
-        enquiry_id:   newId,
-        amount:       totalPrice,
-        advance_paid: amountPaid,
-        balance_due:  Math.max(0, totalPrice - amountPaid),
-        date:         new Date().toISOString().slice(0, 10),
-        description:  addForm.name.trim() + ' booking',
-        created_by:   user.id,
+        id: finId, tenant_id: tenantId, type: 'income',
+        status: totalPrice > 0 && amountPaid >= totalPrice ? 'confirmed' : 'draft',
+        amount: totalPrice, advance_paid: amountPaid,
+        balance_due: Math.max(0, totalPrice - amountPaid),
+        date: new Date().toISOString().slice(0,10),
+        description: addForm.name.trim() + ' booking', created_by: user.id,
       })
-      if (finErr) console.error('Finance insert error:', finErr)
+      if (!finErr) await supabase.from('hc_finance').update({ enquiry_id: newId }).eq('id', finId)
     }
- 
     setSaving(false)
     setAddForm(BLANK())
     setShowAdd(false)
@@ -365,8 +353,8 @@ export const Enquiries: React.FC = () => {
   // ── Save edit panel ────────────────────────────────────
   const savePanel = async () => {
     if (!panel || !user) return
-    const totalPrice  = parseFloat(editForm.total_price) || 0
-    const amountPaid  = parseFloat(editForm.amount_paid) || 0
+    const totalPrice  = Math.max(0, parseFloat(editForm.total_price) || 0)
+    const amountPaid  = Math.max(0, parseFloat(editForm.amount_paid) || 0)
     const balanceDue  = Math.max(0, totalPrice - amountPaid)
     const wasBooked   = panel.status !== 'booked' && editForm.status === 'booked'
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
@@ -377,7 +365,7 @@ export const Enquiries: React.FC = () => {
       return
     }
  
-    const { error: enqErr } = await supabase.from('hc_enquiries').update({
+    await supabase.from('hc_enquiries').update({
       name:         editForm.name,
       phone:        editForm.phone || null,
       email:        editForm.email || null,
@@ -394,29 +382,40 @@ export const Enquiries: React.FC = () => {
       updated_at:   new Date().toISOString(),
     }).eq('id', panel.id)
  
-    if (enqErr) {
-      console.error('Enquiry update error:', enqErr)
-      showToast('Error updating enquiry: ' + enqErr.message)
-      return
-    }
- 
     // Handle income draft
-    // Draft income is auto-created by hc_on_customer_booked trigger
-    // Update existing draft if amounts changed on a re-save
-    const { data: existingDraft } = await supabase
-      .from('hc_finance').select('id')
-      .eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id)
-      .eq('type', 'income').eq('status', 'draft').maybeSingle()
+    const { data: existingDrafts } = await supabase
+      .from('hc_finance')
+      .select('id')
+      .eq('tenant_id', panel.tenant_id)
+      .eq('enquiry_id', panel.id)
+      .eq('type', 'income')
+      .eq('status', 'draft')
  
     if (wasBooked) {
-      showToast('Saved · Draft income created')
-    } else if (existingDraft) {
-      await supabase.from('hc_finance').update({
-        amount:       totalPrice,
-        advance_paid: amountPaid,
-        balance_due:  balanceDue,
-      }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
-      showToast('Changes saved · Draft income updated')
+      if (!existingDrafts || existingDrafts.length === 0) {
+        await supabase.from('hc_finance').insert({
+          tenant_id:   panel.tenant_id,
+          type:        'income',
+          status:      isFullyPaid ? 'confirmed' : 'draft',
+          enquiry_id:  panel.id,
+          amount:      totalPrice,
+          advance_paid: amountPaid,
+          balance_due:  balanceDue,
+          date:         editForm.check_in || new Date().toISOString().slice(0, 10),
+          description:  `${panel.name} booking`,
+          created_by:   user.id,
+          ...(isFullyPaid ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
+        })
+        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Saved · Draft income created')
+      } else {
+        await supabase.from('hc_finance').update({
+          amount:       totalPrice,
+          advance_paid: amountPaid,
+          balance_due:  balanceDue,
+          ...(isFullyPaid ? { status:'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
+        }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
+        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Changes saved · Draft income updated')
+      }
     } else {
       showToast('Changes saved')
     }
@@ -531,7 +530,7 @@ export const Enquiries: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ padding:"14px 20px 0 20px" }}>
+      <div className="page-content">
  
         {/* Add form */}
         {showAdd && (
@@ -576,6 +575,7 @@ export const Enquiries: React.FC = () => {
                 <div key={k}>
                   <label style={lbl}>{l}</label>
                   <input type={t} placeholder={p} value={(addForm as Record<string,string>)[k]}
+                    min={t==='number' ? (k==='guests' ? '1' : '0') : undefined}
                     onChange={e => setAddForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
                 </div>
               ))}
@@ -689,6 +689,7 @@ export const Enquiries: React.FC = () => {
                 <div key={k}>
                   <label style={lbl}>{l}</label>
                   <input type={t} placeholder={p} value={(addForm as Record<string,string>)[k]}
+                    min={t==='number' ? (k==='guests' ? '1' : '0') : undefined}
                     onChange={e => setAddForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
                 </div>
               ))}
@@ -748,13 +749,13 @@ export const Enquiries: React.FC = () => {
             </div>
           </>
         )}
-      </div>
  
         {/* Table */}
-        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
+        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
           ) : (
+            <div className="table-wrap">
               <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'960px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
@@ -807,11 +808,11 @@ export const Enquiries: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
           )}
         </div>
  
         {/* Pagination */}
-      <div style={{ padding:"0 20px" }}>
         {totalPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 4px', marginTop:'10px' }}>
             <span style={{ fontSize:'12px', color:'#9ca3af' }}>
@@ -860,7 +861,7 @@ export const Enquiries: React.FC = () => {
                 ] as [string,string,string][]).map(([l, k, t]) => (
                   <div key={k}>
                     <label style={{ ...lbl, color:'#9ca3af' }}>{l}</label>
-                    <input type={t} value={editForm[k] || ''} onChange={e => setEditForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
+                    <input type={t} value={editForm[k] || ''} min={t==='number' ? (k==='guests' ? '1' : '0') : undefined} onChange={e => setEditForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
                   </div>
                 ))}
                 <div>
@@ -941,11 +942,11 @@ export const Enquiries: React.FC = () => {
                 <div className="form-grid-2">
                   <div>
                     <label style={{ ...lbl, color:'#9ca3af' }}>Total price ₹</label>
-                    <input type="number" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
+                    <input type="number" min="0" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
                   </div>
                   <div>
                     <label style={{ ...lbl, color:'#9ca3af' }}>Amount paid ₹</label>
-                    <input type="number" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
+                    <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
                   </div>
                 </div>
                 {(() => {

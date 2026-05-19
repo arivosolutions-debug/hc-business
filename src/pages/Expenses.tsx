@@ -90,7 +90,7 @@ export const Expenses: React.FC = () => {
     setSaving(true)
     await supabase.from('hc_finance').insert({
       tenant_id: tenantId, type:'expense', status:'confirmed',
-      amount: parseFloat(form.amount), category: form.category,
+      amount: Math.max(0, parseFloat(form.amount) || 0), category: form.category,
       description: form.description, date: form.date, created_by: user.id,
     })
     setSaving(false); setForm(BLANK); setShowAdd(false); load()
@@ -107,7 +107,7 @@ export const Expenses: React.FC = () => {
     setSaving(true)
     await supabase.from('hc_finance').update({
       date:        editForm.date,
-      amount:      parseFloat(editForm.amount) || 0,
+      amount:      Math.max(0, parseFloat(editForm.amount) || 0),
       category:    editForm.category,
       description: editForm.description,
       updated_at:  new Date().toISOString(),
@@ -167,7 +167,7 @@ export const Expenses: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ padding:"14px 20px 0 20px" }}>
+      <div className="page-content">
  
         {/* Add form */}
         {showAdd && (
@@ -178,7 +178,7 @@ export const Expenses: React.FC = () => {
             </div>
             <div className="form-grid-4">
               <div><label style={lbl}>Date *</label><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Amount Rs *</label><input type="number" placeholder="0" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
+              <div><label style={lbl}>Amount Rs *</label><input type="number" min="0" placeholder="0" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <label style={lbl}>Category *</label>
@@ -219,12 +219,12 @@ export const Expenses: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
  
         {/* Table */}
-        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
+        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
           {loading ? <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading…</div> : (
-              <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'560px' }}>
+            <div className="table-wrap">
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth:'560px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
                     {['Date','Description','Category','Amount',''].map(h => (
@@ -251,8 +251,10 @@ export const Expenses: React.FC = () => {
                     ))}
                 </tbody>
               </table>
+            </div>
           )}
         </div>
+      </div>
  
       {/* Edit panel */}
       {editRecord && (
@@ -265,7 +267,7 @@ export const Expenses: React.FC = () => {
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'16px 18px' }}>
               <div style={{ marginBottom:'12px' }}><label style={lbl}>Date</label><input type="date" value={editForm.date} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
-              <div style={{ marginBottom:'12px' }}><label style={lbl}>Amount Rs</label><input type="number" value={editForm.amount} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
+              <div style={{ marginBottom:'12px' }}><label style={lbl}>Amount Rs</label><input type="number" min="0" value={editForm.amount} onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))} style={inp} /></div>
               <div style={{ marginBottom:'12px' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <label style={lbl}>Category</label>

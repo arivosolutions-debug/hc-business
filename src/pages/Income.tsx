@@ -43,22 +43,19 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
   }
  
   const handleWhatsApp = () => {
-    // 1. Generate and download the PDF
-    handleDownloadPDF()
-    // 2. Open WhatsApp to business phone number (from profile)
-    const bizPhone = (profile?.phone || '').replace(/\D/g, '')
+    const rawPhone = record.enquiry?.phone || ''
+    const phone = rawPhone.replace(/\D/g, '')
     const bizName = profile?.business_name || 'HC Business'
     const guestName = record.enquiry?.name || record.description || ''
     const msg = encodeURIComponent(
-      `*Receipt — ${bizName}*\n`
+      `*Receipt — ${bizName}*\n\n`
       + `Guest: ${guestName}\n`
-      + `Total: ${fmt(record.amount)} | Paid: ${fmt(record.advance_paid)} | Balance: ${fmt(record.balance_due)}\n\n`
-      + `PDF receipt downloaded — please attach it to this message.`
+      + `Total: ${fmt(record.amount)}\n`
+      + `Paid: ${fmt(record.advance_paid)}\n`
+      + `Balance: ${fmt(record.balance_due)}\n\n`
+      + `Thank you for choosing ${bizName}!`
     )
-    const url = bizPhone
-      ? `https://wa.me/${bizPhone}?text=${msg}`
-      : `https://wa.me/?text=${msg}`
-    setTimeout(() => window.open(url, '_blank'), 500)
+    window.open(`https://wa.me/${phone}?text=${msg}`, '_blank')
   }
  
  
@@ -195,7 +192,6 @@ export const Income: React.FC = () => {
   const [filterMonth, setFilterMonth]     = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterInterest, setFilterInterest] = useState('')
-  const [filterStatus, setFilterStatus]   = useState('')
   const [interests, setInterests]         = useState<string[]>([])
   const [currentPage, setCurrentPage]     = useState(1)
   const [showAdd, setShowAdd]   = useState(false)
@@ -273,22 +269,15 @@ export const Income: React.FC = () => {
  
   // ── Filter ─────────────────────────────────────────────────
   const filtered = records.filter(r => {
-    if (filterMonth !== '' && new Date(r.date + 'T12:00:00').getMonth() !== parseInt(filterMonth)) return false
+    if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
     if (filterPayment && r.payment_type !== filterPayment) return false
     if (filterInterest && r.enquiry?.interest !== filterInterest) return false
-    if (filterStatus === 'draft' && r.status !== 'draft') return false
-    if (filterStatus === 'confirmed' && r.status !== 'confirmed') return false
     return true
   })
  
-  // Drafts: ascending by check-in date (soonest first)
-  // Confirmed: descending by payment date (most recent first)
+  // ── Sort: drafts on top, confirmed at bottom ───────────────
   const sorted: HCFinance[] = [
-    ...filtered.filter(r => r.status === 'draft').sort((a, b) => {
-      const aDate = a.enquiry?.check_in || a.date
-      const bDate = b.enquiry?.check_in || b.date
-      return aDate.localeCompare(bDate)
-    }),
+    ...filtered.filter(r => r.status === 'draft').sort((a, b) => b.date.localeCompare(a.date)),
     ...filtered.filter(r => r.status === 'confirmed').sort((a, b) => b.date.localeCompare(a.date)),
   ]
  
@@ -353,8 +342,8 @@ export const Income: React.FC = () => {
   const handleAdd = async () => {
     if (!user || !addForm.total) { showToast('Total amount is required'); return }
     setSaving(true)
-    const total = parseFloat(addForm.total) || 0
-    const paid  = parseFloat(addForm.amountPaid) || 0
+    const total = Math.max(0, parseFloat(addForm.total) || 0)
+    const paid  = Math.max(0, parseFloat(addForm.amountPaid) || 0)
     const bal   = Math.max(0, total - paid)
     const full  = total > 0 && paid >= total
     await supabase.from('hc_finance').insert({
@@ -439,11 +428,6 @@ export const Income: React.FC = () => {
             <option value="">All months</option>
             {MONTHS.map((m, idx) => <option key={m} value={String(idx)}>{m}</option>)}
           </select>
-          <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
-            <option value="">All status</option>
-            <option value="draft">Drafts</option>
-            <option value="confirmed">Paid</option>
-          </select>
           <select value={filterInterest} onChange={e => { setFilterInterest(e.target.value); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'105px' }}>
             <option value="">All stays</option>
             {interests.map(i => <option key={i} value={i}>{i}</option>)}
@@ -456,7 +440,7 @@ export const Income: React.FC = () => {
       </div>
  
       {/* Content */}
-      <div style={{ padding:"14px 20px 0 20px" }}>
+      <div className="page-content">
  
         {/* Manual add form */}
         {showAdd && (
@@ -467,8 +451,8 @@ export const Income: React.FC = () => {
             </div>
             <div className="form-grid">
               <div><label style={lbl}>Description *</label><input placeholder="e.g. Walk-in booking" value={addForm.description} onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Total price Rs *</label><input type="number" placeholder="0" value={addForm.total} onChange={e => setAddForm(f => ({ ...f, total: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Amount paid Rs</label><input type="number" placeholder="0" value={addForm.amountPaid} onChange={e => setAddForm(f => ({ ...f, amountPaid: e.target.value }))} style={inp} /></div>
+              <div><label style={lbl}>Total price Rs *</label><input type="number" min="0" placeholder="0" value={addForm.total} onChange={e => setAddForm(f => ({ ...f, total: e.target.value }))} style={inp} /></div>
+              <div><label style={lbl}>Amount paid Rs</label><input type="number" min="0" placeholder="0" value={addForm.amountPaid} onChange={e => setAddForm(f => ({ ...f, amountPaid: e.target.value }))} style={inp} /></div>
               <div><label style={lbl}>Expected date</label><input type="date" value={addForm.expectedDate} onChange={e => setAddForm(f => ({ ...f, expectedDate: e.target.value }))} style={inp} /></div>
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
@@ -510,13 +494,13 @@ export const Income: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
  
         {/* Table */}
-        <div style={{ flex:1, overflowX:'auto', overflowY:'auto', WebkitOverflowScrolling:'touch', borderTop:'1px solid #e5e7eb', background:'#ffffff' }}>
+        <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', overflow:'hidden' }}>
           {loading ? (
             <div style={{ padding:'40px', textAlign:'center', color:'#9ca3af', fontSize:'13px' }}>Loading...</div>
           ) : (
+            <div className="table-wrap">
               <table className="alt-table" style={{ width:'100%', borderCollapse:'collapse', minWidth:'900px' }}>
                 <thead>
                   <tr style={{ borderBottom:'1px solid #e5e7eb', background:'#f9fafb' }}>
@@ -563,11 +547,11 @@ export const Income: React.FC = () => {
                   })}
                 </tbody>
               </table>
+            </div>
           )}
         </div>
  
         {/* Pagination */}
-      <div style={{ padding:"0 20px" }}>
         {totalPages > 1 && (
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 4px', marginTop:'10px' }}>
             <span style={{ fontSize:'12px', color:'#9ca3af' }}>
@@ -622,6 +606,7 @@ export const Income: React.FC = () => {
                   <label style={lbl}>Amount received now Rs</label>
                   <input
                     type="number"
+                    min="0"
                     value={amountNow}
                     onChange={e => setAmountNow(e.target.value)}
                     placeholder={`Max: Rs ${trueBalance.toLocaleString('en-IN')}`}
