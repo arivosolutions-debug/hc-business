@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCFinance, fmt, fmtDate } from '../lib/supabase'
 import * as XLSX from 'xlsx'
  
+const PAGE_SIZE = 50
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const DEFAULT_CATS = ['Electricity','Staff Salary','Maintenance','Food & Supplies','Marketing','Transport','Other']
 const inp: React.CSSProperties = { width:'100%', padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#111111', background:'#ffffff', outline:'none', boxSizing:'border-box' }
@@ -17,6 +18,7 @@ export const Expenses: React.FC = () => {
   const [filterMonth, setFilterMonth] = useState('')
   const [filterCat, setFilterCat] = useState('')
   const [showAdd, setShowAdd]     = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
   const [form, setForm]           = useState(BLANK)
   const [saving, setSaving]       = useState(false)
   const [cats, setCats]           = useState<string[]>(DEFAULT_CATS)
@@ -83,6 +85,8 @@ export const Expenses: React.FC = () => {
     })
     .sort((a, b) => b.date.localeCompare(a.date))
  
+  const totalPages = Math.ceil(displayed.length / PAGE_SIZE)
+  const paginated = displayed.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const total = displayed.reduce((s, r) => s + r.amount, 0)
  
   const handleAdd = async () => {
@@ -153,11 +157,11 @@ export const Expenses: React.FC = () => {
           <span style={{ fontSize:'12px', color:'#9ca3af' }}>Total: {fmt(total)}</span>
         </div>
         <div className="filter-bar">
-          <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...sel, width:'130px' }}>
+          <select value={filterMonth} onChange={e => { setFilterMonth(e.target.value); setCurrentPage(1) }} style={{ ...sel, width:'130px' }}>
             <option value="">All months</option>
             {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
           </select>
-          <select value={filterCat} onChange={e => setFilterCat(e.target.value)} style={sel}>
+          <select value={filterCat} onChange={e => { setFilterCat(e.target.value); setCurrentPage(1) }} style={sel}>
             <option value="">All categories</option>
             {cats.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
@@ -233,9 +237,9 @@ export const Expenses: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayed.length === 0
+                  {paginated.length === 0
                     ? <tr><td colSpan={5} style={{ padding:'32px', textAlign:'center', fontSize:'12px', color:'#9ca3af' }}>No expenses yet.</td></tr>
-                    : displayed.map(r => (
+                    : paginated.map(r => (
                       <tr key={r.id} style={{ borderBottom:'1px solid #f3f4f6' }}>
                         <td style={{ padding:'13px 16px', fontSize:'12px', color:'#9ca3af', whiteSpace:'nowrap' }}>{fmtDate(r.date)}</td>
                         <td style={{ padding:'13px 16px', fontSize:'13px', color:'#111111' }}>{r.description}</td>

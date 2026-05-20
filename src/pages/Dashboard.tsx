@@ -155,7 +155,7 @@ export const Dashboard: React.FC = () => {
  
       // Uncontacted leads — enquiry_date within period
       supabase.from('hc_enquiries').select('*', { count:'exact', head:true })
-        .eq('tenant_id', tenantId).eq('status', 'new')
+        .eq('tenant_id', tenantId).eq('status', 'contacted')
         .gte('enquiry_date', first).lte('enquiry_date', last),
  
       // Total leads — enquiry_date within period
@@ -192,7 +192,7 @@ export const Dashboard: React.FC = () => {
       .sort((a, b) => b.count - a.count)
  
     // Chart
-    const chartData = await buildChartData(user.id, filter)
+    const chartData = await buildChartData(tenantId!, filter)
  
     // Upcoming 7 days — always from today, not affected by filter
     const todayDate = new Date()
@@ -226,7 +226,7 @@ export const Dashboard: React.FC = () => {
       upcomingCheckOuts: (upOut as UpcomingEntry[]) || [],
     })
     setLoading(false)
-  }, [user, filter])
+  }, [user, filter, tenantId])
  
   useEffect(() => { load() }, [load])
  
