@@ -317,6 +317,7 @@ export const Enquiries: React.FC = () => {
         amount: totalPrice, advance_paid: amountPaid,
         balance_due: Math.max(0, totalPrice - amountPaid),
         date: new Date().toISOString().slice(0,10),
+        accounting_date: addForm.check_in || null,
         description: addForm.name.trim() + ' booking', created_by: user.id,
       })
       if (!finErr) await supabase.from('hc_finance').update({ enquiry_id: newId }).eq('id', finId)
@@ -402,6 +403,7 @@ export const Enquiries: React.FC = () => {
           advance_paid: amountPaid,
           balance_due:  balanceDue,
           date:         editForm.check_in || new Date().toISOString().slice(0, 10),
+          accounting_date: editForm.check_in || null,
           description:  `${panel.name} booking`,
           created_by:   user.id,
           ...(isFullyPaid ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),

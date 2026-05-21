@@ -87,6 +87,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
       ['Check-in', record.enquiry?.check_in ? new Date(record.enquiry.check_in + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
       ['Check-out', record.enquiry?.check_out ? new Date(record.enquiry.check_out + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
       ['Payment type', record.payment_type || '—'],
+      ['Accounting period', record.accounting_date ? new Date(record.accounting_date + 'T12:00:00').toLocaleDateString('en-IN', { month:'long', year:'numeric' }) : '—'],
       ['Total booking amount', '₹' + Math.round(total).toLocaleString('en-IN')],
       ['Amount paid', '₹' + Math.round(paid).toLocaleString('en-IN')],
     ]
@@ -111,6 +112,10 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
   const checkIn  = record.enquiry?.check_in  ? new Date(record.enquiry.check_in + 'T12:00:00').toLocaleDateString('en-IN',  { day:'numeric', month:'short', year:'numeric' }) : '—'
   const checkOut = record.enquiry?.check_out ? new Date(record.enquiry.check_out + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'
  
+  const acctDate = record.accounting_date
+    ? new Date(record.accounting_date + 'T12:00:00').toLocaleDateString('en-IN', { month:'long', year:'numeric' })
+    : '—'
+
   const rows: Array<[string, string]> = [
     ['Guest name',    record.enquiry?.name || record.description || '—'],
     ['Phone',         record.enquiry?.phone || '—'],
@@ -120,6 +125,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     ['Guests',        record.enquiry?.guests ? String(record.enquiry.guests) : '—'],
     ['Payment date',  fmtDate(record.date)],
     ['Payment type',  record.payment_type || '—'],
+    ['Accounting period', acctDate],
   ]
  
   return (

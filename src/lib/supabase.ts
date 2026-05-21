@@ -109,7 +109,7 @@ export interface HCFinance {
   enquiry_id: string | null
   advance_paid: number; balance_due: number; expected_date: string | null
   amount: number; description: string | null; category: string | null
-  payment_type: string | null; date: string; receipt_number: string | null
+  payment_type: string | null; date: string; accounting_date: string | null; receipt_number: string | null
   confirmed_at: string | null; confirmed_by: string | null
   created_by: string | null; notes: string | null
   created_at: string; updated_at: string
@@ -150,4 +150,3 @@ export const fmtShortDate = (d: string | null | undefined) => {
     })
   } catch { return d }
 }
- 
