@@ -88,8 +88,8 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
       ['Check-out', record.enquiry?.check_out ? new Date(record.enquiry.check_out + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
       ['Payment type', record.payment_type || '—'],
       ['Accounting period', record.accounting_date ? new Date(record.accounting_date + 'T12:00:00').toLocaleDateString('en-IN', { month:'long', year:'numeric' }) : '—'],
-      ['Total booking amount', '₹' + Math.round(total).toLocaleString('en-IN')],
-      ['Amount paid', '₹' + Math.round(paid).toLocaleString('en-IN')],
+      ['Total booking amount', 'Rs. ' + Math.round(total).toLocaleString('en-IN')],
+      ['Amount paid', 'Rs. ' + Math.round(paid).toLocaleString('en-IN')],
     ]
     let y = 52
     rows.forEach(([label, val]) => {
@@ -101,7 +101,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     doc.setDrawColor(23,52,30); doc.line(10, y, 138, y); y += 6
     doc.setFontSize(11); doc.setFont('helvetica','bold')
     doc.text('Balance due', 12, y)
-    doc.setTextColor(balance > 0 ? 153 : 22); doc.text(balance > 0 ? '₹' + Math.round(balance).toLocaleString('en-IN') : 'Fully paid', 136, y, { align:'right' })
+    doc.setTextColor(balance > 0 ? 153 : 22); doc.text(balance > 0 ? 'Rs. ' + Math.round(balance).toLocaleString('en-IN') : 'Fully paid', 136, y, { align:'right' })
     doc.setTextColor(150); doc.setFontSize(9); doc.setFont('helvetica','normal')
     doc.text('Thank you for choosing ' + biz + '!', 74, y + 10, { align:'center' })
     doc.save('receipt-' + name.replace(/\s+/g,'-').toLowerCase() + '.pdf')
