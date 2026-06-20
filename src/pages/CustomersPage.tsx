@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCCustomer, HCEnquiry, fmtDate } from '../lib/supabase'
+import { supabase, HCCustomer, HCEnquiry, fmtDate, logActivity, getActor } from '../lib/supabase'
  
 const STATUS: Record<string, { label: string; bg: string; color: string }> = {
   new:        { label:'New',         bg:'#dbeafe', color:'#1e40af' },
@@ -14,12 +14,18 @@ const STATUS: Record<string, { label: string; bg: string; color: string }> = {
 const rupee = (n: number | null | undefined) => n ? '₹' + Math.round(n).toLocaleString('en-IN') : '—'
  
 export const CustomersPage: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner, profile, employee } = useAuth()
   const [customers, setCustomers] = useState<HCCustomer[]>([])
   const [enquiries, setEnquiries] = useState<HCEnquiry[]>([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [editingCustomer, setEditingCustomer] = useState<HCCustomer | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', phone: '', email: '' })
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState('')
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2500) }
  
   const load = useCallback(async () => {
     if (!user) return
@@ -38,6 +44,56 @@ export const CustomersPage: React.FC = () => {
     const msg = 'Delete customer "' + c.name + '"? This cannot be undone.'
     if (!window.confirm(msg)) return
     await supabase.from('hc_customers').delete().eq('id', c.id)
+    if (user && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'customer_deleted', entityType: 'customer', entityId: c.id,
+        description: `${actor.actorName} deleted the customer profile for ${c.name}`,
+      })
+    }
+    load()
+  }
+
+  // ── Open edit modal ─────────────────────────────────────
+  const openEdit = (c: HCCustomer) => {
+    setEditingCustomer(c)
+    setEditForm({ name: c.name, phone: c.phone || '', email: c.email || '' })
+  }
+
+  // ── Save customer edit — cascades to linked enquiries (and Income, which reads via the enquiry join) ─
+  const saveEdit = async () => {
+    if (!editingCustomer) return
+    const name = editForm.name.trim()
+    if (!name) { showToast('Name cannot be empty'); return }
+    const phone = editForm.phone.trim() || null
+    const email = editForm.email.trim() || null
+
+    setSaving(true)
+    const now = new Date().toISOString()
+
+    await supabase.from('hc_customers')
+      .update({ name, phone, email, updated_at: now })
+      .eq('id', editingCustomer.id)
+
+    const { data: linked } = await supabase
+      .from('hc_enquiries')
+      .update({ name, phone, email, updated_at: now })
+      .eq('customer_id', editingCustomer.id)
+      .select('id')
+
+    if (user && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'customer_edited', entityType: 'customer', entityId: editingCustomer.id,
+        description: `${actor.actorName} edited customer ${editingCustomer.name}${name !== editingCustomer.name ? ` (renamed to ${name})` : ''}`,
+      })
+    }
+
+    setSaving(false)
+    setEditingCustomer(null)
+    showToast(`Customer updated · ${linked?.length || 0} enquir${linked?.length === 1 ? 'y' : 'ies'} synced`)
     load()
   }
 
@@ -119,6 +175,11 @@ export const CustomersPage: React.FC = () => {
                       </div>
                       {/* Actions */}
                       <button
+                        onClick={e => { e.stopPropagation(); openEdit(c) }}
+                        style={{ padding:'4px 10px', background:'#dbeafe', color:'#1e40af', border:'1px solid #93c5fd', borderRadius:'6px', fontSize:'10px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
+                        Edit
+                      </button>
+                      <button
                         onClick={e => { e.stopPropagation(); deleteCustomer(c) }}
                         style={{ padding:'4px 10px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'6px', fontSize:'10px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
                         Delete
@@ -196,6 +257,62 @@ export const CustomersPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Edit customer modal */}
+      {editingCustomer && (
+        <>
+          <div onClick={() => !saving && setEditingCustomer(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:60 }} />
+          <div className="modal" style={{ padding:'24px', width:'380px', maxWidth:'92vw' }}>
+            <div style={{ fontSize:'15px', fontWeight:600, color:'#111111', marginBottom:'4px' }}>Edit customer</div>
+            <div style={{ fontSize:'11px', color:'#9ca3af', marginBottom:'18px' }}>
+              Changes will also update all enquiries linked to this customer, and Income records will reflect them automatically.
+            </div>
+
+            <label style={{ fontSize:'11px', fontWeight:500, color:'#6b7280', display:'block', marginBottom:'5px' }}>Name</label>
+            <input
+              value={editForm.name}
+              onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+              style={{ width:'100%', padding:'9px 11px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'13px', color:'#111111', outline:'none', marginBottom:'14px' }}
+            />
+
+            <label style={{ fontSize:'11px', fontWeight:500, color:'#6b7280', display:'block', marginBottom:'5px' }}>Phone</label>
+            <input
+              value={editForm.phone}
+              onChange={e => setEditForm(f => ({ ...f, phone: e.target.value }))}
+              style={{ width:'100%', padding:'9px 11px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'13px', color:'#111111', outline:'none', marginBottom:'14px' }}
+            />
+
+            <label style={{ fontSize:'11px', fontWeight:500, color:'#6b7280', display:'block', marginBottom:'5px' }}>Email</label>
+            <input
+              value={editForm.email}
+              onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))}
+              style={{ width:'100%', padding:'9px 11px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'13px', color:'#111111', outline:'none', marginBottom:'20px' }}
+            />
+
+            <div style={{ display:'flex', gap:'8px' }}>
+              <button
+                disabled={saving}
+                onClick={saveEdit}
+                style={{ flex:1, padding:'10px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1 }}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+              <button
+                disabled={saving}
+                onClick={() => setEditingCustomer(null)}
+                style={{ padding:'10px 16px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position:'fixed', bottom:'24px', left:'50%', transform:'translateX(-50%)', background:'#17341e', color:'#ffffff', fontSize:'12px', fontWeight:500, padding:'8px 20px', borderRadius:'20px', zIndex:80, whiteSpace:'nowrap' }}>
+          {toast}
+        </div>
+      )}
     </div>
   )
 }
