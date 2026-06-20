@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEnquiry } from '../lib/supabase'
+import { supabase, HCEnquiry, logActivity, getActor } from '../lib/supabase'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
  
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -9,7 +9,7 @@ const DAYS   = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 interface DayNote { id: string; note: string; created_at: string }
  
 export const Calendar: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner, profile, employee } = useAuth()
   const today = new Date()
   const [viewYear,  setViewYear]  = useState(today.getFullYear())
   const [viewMonth, setViewMonth] = useState(today.getMonth())
@@ -118,6 +118,14 @@ export const Calendar: React.FC = () => {
       setNotes(prev => [...prev, data as DayNote])
       setNoteDates(prev => { const m = new Map(prev); if (!m.has(selectedDay)) m.set(selectedDay, data.note); return m })
       setNewNote('')
+      if (user) {
+        const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+        logActivity({
+          tenantId, ...actor,
+          action: 'calendar_note_added', entityType: 'calendar_note', entityId: data.id,
+          description: `${actor.actorName} added a calendar note for ${selectedDay}`,
+        })
+      }
     }
     setSavingNote(false)
   }
@@ -128,7 +136,17 @@ export const Calendar: React.FC = () => {
     const { error } = await supabase.from('hc_calendar_notes')
       .update({ note: editText.trim(), updated_by: user?.id, updated_at: new Date().toISOString() })
       .eq('id', id)
-    if (!error) setNotes(prev => prev.map(n => n.id === id ? {...n, note: editText.trim()} : n))
+    if (!error) {
+      setNotes(prev => prev.map(n => n.id === id ? {...n, note: editText.trim()} : n))
+      if (user && tenantId) {
+        const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+        logActivity({
+          tenantId, ...actor,
+          action: 'calendar_note_edited', entityType: 'calendar_note', entityId: id,
+          description: `${actor.actorName} edited a calendar note for ${selectedDay || 'a day'}`,
+        })
+      }
+    }
     setEditingId(null)
     setSavingNote(false)
   }
@@ -136,6 +154,14 @@ export const Calendar: React.FC = () => {
   const deleteNote = async (id: string) => {
     const { error } = await supabase.from('hc_calendar_notes').delete().eq('id', id)
     if (!error) {
+      if (user && tenantId) {
+        const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+        logActivity({
+          tenantId, ...actor,
+          action: 'calendar_note_deleted', entityType: 'calendar_note', entityId: id,
+          description: `${actor.actorName} deleted a calendar note for ${selectedDay || 'a day'}`,
+        })
+      }
       const remaining = notes.filter(n => n.id !== id)
       setNotes(remaining)
       if (remaining.length === 0 && selectedDay) {
