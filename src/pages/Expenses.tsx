@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCFinance, fmt, fmtDate } from '../lib/supabase'
+import { supabase, HCFinance, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
  
 const PAGE_SIZE = 50
@@ -12,7 +12,7 @@ const lbl: React.CSSProperties = { display:'block', fontSize:'10px', fontWeight:
 const BLANK = { date: new Date().toISOString().slice(0,10), amount:'', category:'Staff Salary', description:'' }
  
 export const Expenses: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner, profile, employee } = useAuth()
   const [records, setRecords]     = useState<HCFinance[]>([])
   const [loading, setLoading]     = useState(true)
   const [filterMonth, setFilterMonth] = useState('')
@@ -92,11 +92,20 @@ export const Expenses: React.FC = () => {
   const handleAdd = async () => {
     if (!user || !form.amount || !form.description.trim()) { showToast('Amount and description are required'); return }
     setSaving(true)
+    const amt = Math.max(0, parseFloat(form.amount) || 0)
     await supabase.from('hc_finance').insert({
       tenant_id: tenantId, type:'expense', status:'confirmed',
-      amount: Math.max(0, parseFloat(form.amount) || 0), category: form.category,
+      amount: amt, category: form.category,
       description: form.description, date: form.date, created_by: user.id,
     })
+    if (tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'expense_added', entityType: 'expense',
+        description: `${actor.actorName} added an expense: ${form.description} (${fmt(amt)}, ${form.category})`,
+      })
+    }
     setSaving(false); setForm(BLANK); setShowAdd(false); load()
     showToast('Expense saved')
   }
@@ -109,25 +118,44 @@ export const Expenses: React.FC = () => {
   const saveEdit = async () => {
     if (!editRecord || !user) return
     setSaving(true)
+    const newAmt = Math.max(0, parseFloat(editForm.amount) || 0)
     await supabase.from('hc_finance').update({
       date:        editForm.date,
-      amount:      Math.max(0, parseFloat(editForm.amount) || 0),
+      amount:      newAmt,
       category:    editForm.category,
       description: editForm.description,
       updated_at:  new Date().toISOString(),
     }).eq('id', editRecord.id)
+    if (tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'expense_edited', entityType: 'expense', entityId: editRecord.id,
+        description: `${actor.actorName} edited an expense: ${editForm.description} (${fmt(editRecord.amount)} → ${fmt(newAmt)})`,
+      })
+    }
     setSaving(false); setEditRecord(null); load()
     showToast('Expense updated')
   }
  
   const deleteRecord = async (id: string) => {
     if (!confirm('Delete this expense?')) return
+    const record = records.find(r => r.id === id)
     await supabase.from('hc_finance').delete().eq('id', id)
+    if (tenantId && user) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'expense_deleted', entityType: 'expense', entityId: id,
+        description: `${actor.actorName} deleted an expense: ${record?.description || 'record'} (${fmt(record?.amount)})`,
+      })
+    }
     if (editRecord?.id === id) setEditRecord(null)
     load(); showToast('Expense deleted')
   }
  
   const exportExcel = () => {
+    if (!isOwner) { showToast('Only the owner can export data'); return }
     if (displayed.length === 0) { showToast('No expenses to export'); return }
     const rows = displayed.map(r => ({ Date: r.date, Description: r.description || '', Category: r.category || '', Amount: r.amount }))
     const wb = XLSX.utils.book_new()
@@ -165,7 +193,7 @@ export const Expenses: React.FC = () => {
             <option value="">All categories</option>
             {cats.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>
+          {isOwner && <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>}
           <button onClick={() => setShowAdd(v => !v)} style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>+ Add expense</button>
         </div>
       </div>
