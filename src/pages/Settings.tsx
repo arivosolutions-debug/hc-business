@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEmployee, HCProfile, HCSubscriber, HCInventory } from '../lib/supabase'
+import { supabase, HCEmployee, HCProfile, HCSubscriber, HCInventory, HCActivityLog, fmtDate, logActivity, getActor } from '../lib/supabase'
 import { Eye, EyeOff } from 'lucide-react'
  
 const SUPABASE_URL = 'https://zecuxurmuydzlxsxasxq.supabase.co'
@@ -42,6 +42,7 @@ export const Settings: React.FC = () => {
     { id:'business',   label:'Business profile' },
     { id:'inventory',  label:'Property / Stay' },
     { id:'employees',  label:'Employees' },
+    ...(isOwner ? [{ id:'activity', label:'Activity log' }] : []),
     ...(isSuperAdmin ? [{ id:'onboarding', label:'Onboarding' }] : []),
   ]
  
@@ -60,7 +61,7 @@ export const Settings: React.FC = () => {
   const [savingEmpPerms, setSavingEmpPerms] = useState(false)
  
   // Inventory state
-  const BLANK_INV = { name:'', type:'stay' as 'stay'|'package'|'other', base_price:'', capacity:'', description:'' }
+  const BLANK_INV = { name:'', type:'stay' as 'stay'|'package'|'other', base_price:'', default_margin:'', capacity:'', description:'' }
   const [inventory, setInventory]     = useState<HCInventory[]>([])
   const [showAddInv, setShowAddInv]   = useState(false)
   const [invForm, setInvForm]         = useState(BLANK_INV)
@@ -87,6 +88,11 @@ export const Settings: React.FC = () => {
   const [editEmpFullForm, setEditEmpFullForm] = useState({ name:'', email:'', role:'', password:'' })
   const [showEditEmpPw, setShowEditEmpPw] = useState(false)
   const [savingEditEmp, setSavingEditEmp] = useState(false)
+
+  // Activity log state
+  const [activityLog, setActivityLog] = useState<HCActivityLog[]>([])
+  const [loadingActivity, setLoadingActivity] = useState(false)
+  const [activityActorFilter, setActivityActorFilter] = useState('')
  
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 2800) }
  
@@ -119,12 +125,34 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     if (section === 'onboarding') loadSubscribers()
   }, [section, loadSubscribers])
+
+  const loadActivityLog = useCallback(async () => {
+    if (!tenantId) return
+    setLoadingActivity(true)
+    const { data } = await supabase.from('hc_activity_log')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .order('created_at', { ascending: false })
+      .limit(300)
+    setActivityLog((data as HCActivityLog[]) || [])
+    setLoadingActivity(false)
+  }, [tenantId])
+
+  useEffect(() => {
+    if (section === 'activity') loadActivityLog()
+  }, [section, loadActivityLog])
  
   const saveBiz = async () => {
     if (!tenantId) return
     setSavingBiz(true)
     await supabase.from('hc_profiles').update({ ...biz }).eq('id', tenantId)
     await refreshProfile()
+    const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: biz.owner_name || profile?.owner_name })
+    logActivity({
+      tenantId, ...actor,
+      action: 'business_profile_edited', entityType: 'business_profile',
+      description: `${actor.actorName} updated the business profile`,
+    })
     setSavingBiz(false)
     showToast('Profile saved')
   }
@@ -144,6 +172,12 @@ export const Settings: React.FC = () => {
       })
       const result = await res.json()
       if (!result.success) throw new Error(result.error)
+      const actor = getActor({ userId: user.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'employee_created', entityType: 'employee',
+        description: `${actor.actorName} created an employee account for ${empForm.name} (${empForm.role || 'Staff'})`,
+      })
       setSavingEmp(false)
       setEmpForm({ name:'', email:'', password:'', role:'' })
       setEmpPerms({ ...DEFAULT_PERMS })
@@ -158,6 +192,14 @@ export const Settings: React.FC = () => {
  
   const toggleEmployee = async (emp: HCEmployee) => {
     await supabase.from('hc_employees').update({ is_active: !emp.is_active }).eq('id', emp.id)
+    if (tenantId) {
+      const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: emp.is_active ? 'employee_deactivated' : 'employee_activated', entityType: 'employee', entityId: emp.id,
+        description: `${actor.actorName} ${emp.is_active ? 'deactivated' : 'activated'} ${emp.name}'s account`,
+      })
+    }
     load()
     showToast(emp.is_active ? emp.name + ' deactivated' : emp.name + ' activated')
   }
@@ -170,6 +212,15 @@ export const Settings: React.FC = () => {
   const saveEmpPerms = async (empId: string) => {
     setSavingEmpPerms(true)
     await supabase.from('hc_employees').update({ permissions: editEmpPerms }).eq('id', empId)
+    if (tenantId) {
+      const empName = employees.find(e => e.id === empId)?.name || 'employee'
+      const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'employee_permissions_edited', entityType: 'employee', entityId: empId,
+        description: `${actor.actorName} updated page access permissions for ${empName}`,
+      })
+    }
     setSavingEmpPerms(false)
     setEditEmpId(null)
     load()
@@ -270,6 +321,14 @@ export const Settings: React.FC = () => {
       })
       const result = await res.json()
       if (!result.success) throw new Error(result.error)
+      if (tenantId) {
+        const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+        logActivity({
+          tenantId, ...actor,
+          action: 'employee_edited', entityType: 'employee', entityId: editEmpFullId,
+          description: `${actor.actorName} edited employee ${editEmpFullForm.name}'s account details`,
+        })
+      }
       setEditEmpFullId(null)
       load()
       showToast('Employee updated')
@@ -300,6 +359,7 @@ export const Settings: React.FC = () => {
       name: invForm.name.trim(),
       type: invForm.type,
       base_price: invForm.base_price ? parseFloat(invForm.base_price) : null,
+      default_margin: invForm.default_margin ? parseFloat(invForm.default_margin) : null,
       capacity: invForm.capacity ? parseInt(invForm.capacity) : null,
       description: invForm.description || null,
       is_active: true,
@@ -307,7 +367,15 @@ export const Settings: React.FC = () => {
     })
     setSavingInv(false)
     if (error) { showToast('Error: ' + error.message); return }
-    setInvForm({ name:'', type:'stay', base_price:'', capacity:'', description:'' })
+    if (tenantId) {
+      const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'inventory_added', entityType: 'inventory',
+        description: `${actor.actorName} added a property/stay: ${invForm.name.trim()}`,
+      })
+    }
+    setInvForm({ name:'', type:'stay', base_price:'', default_margin:'', capacity:'', description:'' })
     setShowAddInv(false)
     loadInventory()
     showToast('Property added')
@@ -320,11 +388,20 @@ export const Settings: React.FC = () => {
       name: editInvForm.name.trim(),
       type: editInvForm.type,
       base_price: editInvForm.base_price ? parseFloat(editInvForm.base_price) : null,
+      default_margin: editInvForm.default_margin ? parseFloat(editInvForm.default_margin) : null,
       capacity: editInvForm.capacity ? parseInt(editInvForm.capacity) : null,
       description: editInvForm.description || null,
     }).eq('id', editInvId)
     setSavingEditInv(false)
     if (error) { showToast('Error: ' + error.message); return }
+    if (tenantId) {
+      const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'inventory_edited', entityType: 'inventory', entityId: editInvId,
+        description: `${actor.actorName} edited property/stay: ${editInvForm.name.trim()}`,
+      })
+    }
     setEditInvId(null)
     loadInventory()
     showToast('Property updated')
@@ -340,6 +417,14 @@ export const Settings: React.FC = () => {
       if (!window.confirm(`"${item.name}" is used in ${count} enquiry record${count > 1 ? 's' : ''}. It will be removed from dropdowns but existing records won't change. Delete anyway?`)) return
     }
     await supabase.from('hc_inventory').delete().eq('id', item.id)
+    if (tenantId) {
+      const actor = getActor({ userId: user?.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'inventory_deleted', entityType: 'inventory', entityId: item.id,
+        description: `${actor.actorName} deleted property/stay: ${item.name}`,
+      })
+    }
     loadInventory()
     showToast(item.name + ' deleted')
   }
@@ -350,6 +435,7 @@ export const Settings: React.FC = () => {
       name: item.name,
       type: item.type,
       base_price: item.base_price ? String(item.base_price) : '',
+      default_margin: item.default_margin ? String(item.default_margin) : '',
       capacity: item.capacity ? String(item.capacity) : '',
       description: item.description || '',
     })
@@ -410,6 +496,7 @@ export const Settings: React.FC = () => {
               </select>
             </div>
             <div><label style={lbl}>Base price (₹)</label><input type="number" placeholder="0" value={invForm.base_price} onChange={e => setInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
+            <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" placeholder="0" value={invForm.default_margin} onChange={e => setInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>
             <div><label style={lbl}>Capacity (guests)</label><input type="number" placeholder="2" value={invForm.capacity} onChange={e => setInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
             <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input placeholder="Short description (optional)" value={invForm.description} onChange={e => setInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
           </div>
@@ -448,6 +535,7 @@ export const Settings: React.FC = () => {
                       </select>
                     </div>
                     <div><label style={lbl}>Base price (₹)</label><input type="number" value={editInvForm.base_price} onChange={e => setEditInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
+                    <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" value={editInvForm.default_margin} onChange={e => setEditInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>
                     <div><label style={lbl}>Capacity (guests)</label><input type="number" value={editInvForm.capacity} onChange={e => setEditInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
                     <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input value={editInvForm.description} onChange={e => setEditInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
                   </div>
@@ -472,6 +560,7 @@ export const Settings: React.FC = () => {
                     <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px' }}>
                       {item.type.charAt(0).toUpperCase() + item.type.slice(1)}
                       {item.base_price ? ` · ₹${item.base_price.toLocaleString('en-IN')}` : ''}
+                      {item.default_margin ? ` · Margin ₹${item.default_margin.toLocaleString('en-IN')}` : ''}
                       {item.capacity ? ` · ${item.capacity} guest${item.capacity !== 1 ? 's' : ''}` : ''}
                     </div>
                     {item.description && <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>{item.description}</div>}
@@ -493,6 +582,86 @@ export const Settings: React.FC = () => {
     </div>
   )
  
+  const ACTION_LABELS: Record<string, { label: string; bg: string; color: string }> = {
+    enquiry_created:            { label:'Enquiry added',    bg:'#dbeafe', color:'#1e40af' },
+    enquiry_edited:              { label:'Edited',           bg:'#f3f4f6', color:'#6b7280' },
+    enquiry_booked:              { label:'Booked',           bg:'#dcfce7', color:'#166534' },
+    enquiry_cancelled:           { label:'Cancelled',        bg:'#fee2e2', color:'#991b1b' },
+    enquiry_marked_noresponse:   { label:'No response',      bg:'#f3f4f6', color:'#6b7280' },
+    enquiry_deleted:              { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+    enquiry_payment_changed:     { label:'Payment changed',  bg:'#fef9c3', color:'#854f0b' },
+    enquiry_note_added:          { label:'Note added',       bg:'#f3f4f6', color:'#6b7280' },
+    income_created:               { label:'Income added',     bg:'#dbeafe', color:'#1e40af' },
+    income_recorded:             { label:'Payment recorded', bg:'#dcfce7', color:'#166534' },
+    income_deleted:               { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+    expense_added:                { label:'Expense added',    bg:'#dbeafe', color:'#1e40af' },
+    expense_edited:               { label:'Expense edited',   bg:'#fef9c3', color:'#854f0b' },
+    expense_deleted:              { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+    customer_edited:              { label:'Customer edited',  bg:'#fef9c3', color:'#854f0b' },
+    customer_deleted:             { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+    calendar_note_added:         { label:'Note added',       bg:'#dbeafe', color:'#1e40af' },
+    calendar_note_edited:        { label:'Note edited',      bg:'#fef9c3', color:'#854f0b' },
+    calendar_note_deleted:       { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+    employee_created:             { label:'Employee added',   bg:'#dbeafe', color:'#1e40af' },
+    employee_edited:              { label:'Employee edited',  bg:'#fef9c3', color:'#854f0b' },
+    employee_permissions_edited: { label:'Permissions changed', bg:'#fef9c3', color:'#854f0b' },
+    employee_activated:          { label:'Activated',        bg:'#dcfce7', color:'#166534' },
+    employee_deactivated:        { label:'Deactivated',      bg:'#fee2e2', color:'#991b1b' },
+    business_profile_edited:     { label:'Profile updated',  bg:'#f3f4f6', color:'#6b7280' },
+    inventory_added:              { label:'Property added',   bg:'#dbeafe', color:'#1e40af' },
+    inventory_edited:             { label:'Property edited',  bg:'#fef9c3', color:'#854f0b' },
+    inventory_deleted:            { label:'Deleted',          bg:'#fee2e2', color:'#991b1b' },
+  }
+
+  const activityActors = Array.from(new Set(activityLog.map(a => a.actor_name))).sort()
+  const filteredActivity = activityActorFilter
+    ? activityLog.filter(a => a.actor_name === activityActorFilter)
+    : activityLog
+
+  const renderActivity = () => (
+    <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'3px', flexWrap:'wrap', gap:'10px' }}>
+        <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>Activity log</div>
+        {activityActors.length > 0 && (
+          <select value={activityActorFilter} onChange={e => setActivityActorFilter(e.target.value)}
+            style={{ ...inp, width:'auto', padding:'6px 10px', fontSize:'11px' }}>
+            <option value="">All staff</option>
+            {activityActors.map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+        )}
+      </div>
+      <div style={{ fontSize:'12px', color:'#9ca3af', marginBottom:'18px' }}>
+        Everything you and your employees do — enquiries, bookings, payments, customers, calendar notes, and more.
+      </div>
+
+      {loadingActivity ? (
+        <div style={{ padding:'30px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>Loading…</div>
+      ) : filteredActivity.length === 0 ? (
+        <div style={{ padding:'30px', textAlign:'center', fontSize:'13px', color:'#9ca3af' }}>No activity recorded yet.</div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+          {filteredActivity.map(a => {
+            const tag = ACTION_LABELS[a.action] || { label: a.action, bg:'#f3f4f6', color:'#6b7280' }
+            return (
+              <div key={a.id} style={{ display:'flex', alignItems:'flex-start', gap:'10px', padding:'10px 0', borderBottom:'1px solid #f9fafb' }}>
+                <span style={{ flexShrink:0, padding:'2px 9px', borderRadius:'20px', fontSize:'10px', fontWeight:600, background:tag.bg, color:tag.color, whiteSpace:'nowrap', marginTop:'1px' }}>
+                  {tag.label}
+                </span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:'12px', color:'#374151' }}>{a.description}</div>
+                  <div style={{ fontSize:'10px', color:'#9ca3af', marginTop:'2px' }}>
+                    {fmtDate(a.created_at)} · {new Date(a.created_at).toLocaleTimeString('en-IN', { hour:'numeric', minute:'2-digit' })}
+                    {a.actor_role === 'staff' && <span style={{ marginLeft:'6px', color:'#6b7280' }}>· Staff</span>}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+
   const renderEmployees = () => (
     <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'3px' }}>
@@ -792,6 +961,7 @@ export const Settings: React.FC = () => {
           {section === 'business'   && renderBusiness()}
           {section === 'inventory'  && renderInventory()}
           {section === 'employees'  && renderEmployees()}
+          {section === 'activity'   && isOwner && renderActivity()}
           {section === 'onboarding' && isSuperAdmin && renderOnboarding()}
         </div>
       </div>
