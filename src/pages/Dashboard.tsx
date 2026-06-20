@@ -20,6 +20,7 @@ interface Stats {
   booked: number
   revenue: number
   expenses: number
+  margin: number
   chartData: { month: string; revenue: number; expenses: number }[]
   sources: { source: string; count: number }[]
   upcomingCheckIns: UpcomingEntry[]
@@ -125,6 +126,7 @@ export const Dashboard: React.FC = () => {
   const [filter, setFilter] = useState<FilterValue>(`month:${CUR_MONTH}`)
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
+  const [marginInUse, setMarginInUse] = useState(false)
  
   const load = useCallback(async () => {
     if (!user) return
@@ -142,6 +144,8 @@ export const Dashboard: React.FC = () => {
       { data: incData },
       { data: expData },
       { data: srcData },
+      { data: marginData },
+      { count: marginUsedCount },
     ] = await Promise.all([
       // Check-ins within period
       supabase.from('hc_enquiries').select('*', { count:'exact', head:true })
@@ -182,6 +186,17 @@ export const Dashboard: React.FC = () => {
       supabase.from('hc_enquiries').select('source')
         .eq('tenant_id', tenantId)
         .gte('enquiry_date', first).lte('enquiry_date', last),
+ 
+      // Margin — booked/completed enquiries, enquiry_date within period
+      supabase.from('hc_enquiries').select('margin')
+        .eq('tenant_id', tenantId).in('status', ['booked', 'completed'])
+        .gte('enquiry_date', first).lte('enquiry_date', last),
+
+      // Whether this subscriber uses margin at all — checked across ALL of their
+      // enquiries, not just the current date range, so the card doesn't flicker
+      // in/out as the filter changes for a subscriber who genuinely uses it.
+      supabase.from('hc_enquiries').select('id', { count: 'exact', head: true })
+        .eq('tenant_id', tenantId).gt('margin', 0),
     ])
  
     // Source breakdown
@@ -220,11 +235,13 @@ export const Dashboard: React.FC = () => {
       booked:     booked || 0,
       revenue:    incData?.reduce((s, r) => s + (r.amount || 0), 0) || 0,
       expenses:   expData?.reduce((s, r) => s + (r.amount || 0), 0) || 0,
+      margin:     marginData?.reduce((s, r) => s + (r.margin || 0), 0) || 0,
       chartData,
       sources,
       upcomingCheckIns:  (upIn  as UpcomingEntry[]) || [],
       upcomingCheckOuts: (upOut as UpcomingEntry[]) || [],
     })
+    setMarginInUse((marginUsedCount || 0) > 0)
     setLoading(false)
   }, [user, filter, tenantId])
  
@@ -298,6 +315,7 @@ export const Dashboard: React.FC = () => {
               <KPICard label={`Conversion — ${filterLabel}`}      value={`${conv}%`}               dot="#22c55e" />
               <KPICard label={`Revenue — ${filterLabel}`}         value={fmt(stats!.revenue)}       dot="#f97316" />
               <KPICard label={`Net profit — ${filterLabel}`}      value={fmt(profit)}               dot="#a855f7" />
+              {marginInUse && <KPICard label={`Margin — ${filterLabel}`} value={fmt(stats!.margin)}  dot="#14b8a6" />}
             </div>
  
             {/* Upcoming 7 days strip */}
