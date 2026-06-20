@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCFinance, HCProfile, fmt, fmtDate } from '../lib/supabase'
+import { supabase, HCFinance, HCProfile, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
  
@@ -191,7 +191,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
  
 // ── Main Income component ──────────────────────────────────────
 export const Income: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner, profile: authProfile, employee } = useAuth()
   const [records, setRecords]   = useState<HCFinance[]>([])
   const [profile, setProfile]   = useState<HCProfile | null>(null)
   const [loading, setLoading]   = useState(true)
@@ -281,9 +281,16 @@ export const Income: React.FC = () => {
     return true
   })
  
-  // ── Sort: drafts on top, confirmed at bottom ───────────────
+  // ── Sort: drafts on top (soonest check-in first — most urgent balance to collect),
+  //          confirmed below (newest payment first, like a normal ledger) ───────────
   const sorted: HCFinance[] = [
-    ...filtered.filter(r => r.status === 'draft').sort((a, b) => b.date.localeCompare(a.date)),
+    ...filtered.filter(r => r.status === 'draft').sort((a, b) => {
+      const aIn = a.enquiry?.check_in, bIn = b.enquiry?.check_in
+      if (aIn && bIn) return aIn.localeCompare(bIn)
+      if (aIn) return -1   // has a check-in date → ranks above one that doesn't
+      if (bIn) return 1
+      return b.date.localeCompare(a.date)  // neither has a check-in date — fall back to payment date
+    }),
     ...filtered.filter(r => r.status === 'confirmed').sort((a, b) => b.date.localeCompare(a.date)),
   ]
  
@@ -306,6 +313,14 @@ export const Income: React.FC = () => {
     const label = r.enquiry?.name || r.description || 'this record'
     if (!window.confirm(`Delete income record for "${label}"? This cannot be undone.`)) return
     await supabase.from('hc_finance').delete().eq('id', r.id)
+    if (user && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'income_deleted', entityType: 'income', entityId: r.id,
+        description: `${actor.actorName} deleted the income record for ${label} (${fmt(r.advance_paid)} paid)`,
+      })
+    }
     load()
     showToast('Income record deleted')
   }
@@ -338,6 +353,16 @@ export const Income: React.FC = () => {
         updated_at:  new Date().toISOString(),
       }).eq('id', editRecord.enquiry_id)
     }
+
+    if (amountNowNum > 0 && tenantId) {
+      const label = editRecord.enquiry?.name || editRecord.description || 'this record'
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'income_recorded', entityType: 'income', entityId: editRecord.id,
+        description: `${actor.actorName} recorded ${fmt(amountNowNum)} payment for ${label}${isFullyPaid ? ' — fully paid' : ` (balance ${fmt(newBalance)})`}`,
+      })
+    }
  
     setSaving(false)
     setEditRecord(null)
@@ -360,6 +385,14 @@ export const Income: React.FC = () => {
       date: new Date().toISOString().slice(0, 10), created_by: user.id,
       ...(full ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
     })
+    if (tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'income_created', entityType: 'income',
+        description: `${actor.actorName} added a manual income entry: ${addForm.description || 'income'} (${fmt(total)}, ${fmt(paid)} paid)`,
+      })
+    }
     setSaving(false)
     setAddForm({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
     setShowAdd(false)
@@ -368,6 +401,7 @@ export const Income: React.FC = () => {
   }
  
   const exportExcel = () => {
+    if (!isOwner) { showToast('Only the owner can export data'); return }
     if (sorted.length === 0) { showToast('No records to export'); return }
     const rows = sorted.map(r => ({
       Date:             r.date,
@@ -422,7 +456,7 @@ export const Income: React.FC = () => {
             )}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'6px', flexShrink:0 }}>
-            <button onClick={exportExcel} style={{ padding:'6px 10px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>↓ Excel</button>
+            {isOwner && <button onClick={exportExcel} style={{ padding:'6px 10px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>↓ Excel</button>}
             <button onClick={() => setShowAdd(v => !v)} style={{ padding:'6px 12px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>
               + Add income
             </button>
