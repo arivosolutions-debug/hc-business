@@ -60,7 +60,7 @@ export interface HCSetting {
 export interface HCInventory {
   id: string; tenant_id: string; type: 'stay' | 'package' | 'other'
   name: string; description: string | null; capacity: number | null
-  base_price: number | null; is_active: boolean; sort_order: number
+  base_price: number | null; default_margin: number | null; is_active: boolean; sort_order: number
   created_at: string; updated_at: string
 }
  
@@ -91,6 +91,7 @@ export interface HCEnquiry {
   enquiry_date: string | null
   total_price: number | null
   amount_paid: number | null
+  margin: number | null
   conversation_log: ConversationEntry[]
   notes: string | null
   created_by: string | null; updated_by: string | null
@@ -149,4 +150,55 @@ export const fmtShortDate = (d: string | null | undefined) => {
       day: 'numeric', month: 'short',
     })
   } catch { return d }
+}
+
+// ── Activity log ──────────────────────────────────────────
+export type HCActivityEntityType = 'enquiry' | 'income' | 'expense' | 'customer' | 'calendar_note' | 'employee' | 'business_profile' | 'inventory'
+
+export interface HCActivityLog {
+  id: string; tenant_id: string
+  actor_id: string; actor_name: string; actor_role: 'owner' | 'staff'
+  action: string
+  entity_type: HCActivityEntityType
+  entity_id: string | null
+  description: string
+  created_at: string
+}
+
+// Resolves "who is performing this action" from useAuth() values, for use with logActivity.
+export const getActor = (args: {
+  userId: string | undefined
+  isOwner: boolean
+  employeeName: string | undefined | null
+  ownerName: string | undefined | null
+}): { actorId: string; actorName: string; actorRole: 'owner' | 'staff' } => ({
+  actorId:   args.userId || '',
+  actorName: args.isOwner ? (args.ownerName || 'Owner') : (args.employeeName || 'Staff'),
+  actorRole: args.isOwner ? 'owner' : 'staff',
+})
+
+// Fire-and-forget — never blocks or breaks the action it's attached to if logging fails.
+export const logActivity = async (params: {
+  tenantId: string
+  actorId: string
+  actorName: string
+  actorRole: 'owner' | 'staff'
+  action: string
+  entityType: HCActivityEntityType
+  entityId?: string | null
+  description: string
+}) => {
+  try {
+    const { error } = await supabase.from('hc_activity_log').insert({
+      tenant_id:   params.tenantId,
+      actor_id:    params.actorId,
+      actor_name:  params.actorName,
+      actor_role:  params.actorRole,
+      action:      params.action,
+      entity_type: params.entityType,
+      entity_id:   params.entityId || null,
+      description: params.description,
+    })
+    if (error) console.error('logActivity insert failed:', error.message, error)
+  } catch (err) { console.error('logActivity threw:', err) /* never break the real action */ }
 }
