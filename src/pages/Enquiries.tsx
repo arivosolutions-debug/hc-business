@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEnquiry, HCCustomer, fmtDate, STATUS_ORDER } from '../lib/supabase'
+import { supabase, HCEnquiry, HCCustomer, fmtDate, STATUS_ORDER, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
  
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -13,6 +13,11 @@ const STATUS: Record<string, { label: string; bg: string; color: string }> = {
   noresponse: { label:'No response', bg:'#f3f4f6', color:'#6b7280' },
   cancelled:  { label:'Cancelled',   bg:'#fee2e2', color:'#991b1b' },
 }
+
+// Statuses a person can manually choose. "Completed" is set automatically — see load() —
+// once a booking is fully paid and its check-out date has passed.
+const SELECTABLE_STATUS: Record<string, { label: string; bg: string; color: string }> =
+  Object.fromEntries(Object.entries(STATUS).filter(([k]) => k !== 'completed'))
  
 const DEFAULT_SOURCES = ['WhatsApp DM','Instagram DM','Website form','Phone call','Walk-in','Referral','Other']
 const inp: React.CSSProperties = { width:'100%', padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#111111', background:'#ffffff', outline:'none', boxSizing:'border-box' }
@@ -25,16 +30,24 @@ const Badge = ({ status }: { status: string }) => {
 }
  
 const rupee = (n: number | null | undefined) => n ? '₹' + Math.round(n).toLocaleString('en-IN') : '—'
+
+// ── Stale enquiry detection ──
+const isStaleContacted = (e: HCEnquiry) => {
+  if (e.status !== 'contacted') return false
+  const lastTouched = new Date(e.updated_at).getTime()
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000
+  return Date.now() - lastTouched >= tenDaysMs
+}
  
 const BLANK = () => ({
   name:'', phone:'', email:'', source:'WhatsApp DM', status:'contacted',
   interest:'', check_in:'', check_out:'', guests:'1',
-  total_price:'', amount_paid:'0', notes:'',
+  total_price:'', amount_paid:'0', margin:'', notes:'',
   enquiry_date: new Date().toISOString().slice(0, 10),
 })
  
 export const Enquiries: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner, profile, employee } = useAuth()
   const [enquiries, setEnquiries] = useState<HCEnquiry[]>([])
   const [loading, setLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('')
@@ -52,6 +65,7 @@ export const Enquiries: React.FC = () => {
   const [sources, setSources] = useState<string[]>(DEFAULT_SOURCES)
   const [interests, setInterests] = useState<string[]>([])
   const [inventoryMap, setInventoryMap] = useState<Record<string, number | null>>({})
+  const [marginMap, setMarginMap] = useState<Record<string, number | null>>({})
   const [addingSource, setAddingSource] = useState(false)
   const [newSource, setNewSource] = useState('')
   const [addingInterest, setAddingInterest] = useState(false)
@@ -87,9 +101,28 @@ export const Enquiries: React.FC = () => {
     const [{ data }, { data: srcData }, { data: invData }] = await Promise.all([
       supabase.from('hc_enquiries').select('*').eq('tenant_id', tenantId).order('enquiry_date', { ascending: false, nullsFirst: false }),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'source').order('sort_order'),
-      supabase.from('hc_inventory').select('name, base_price').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
+      supabase.from('hc_inventory').select('name, base_price, default_margin').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
     ])
     const enqRecords = (data as HCEnquiry[]) || []
+
+    // Auto-complete: a booking moves from Booked → Completed once check-out has passed
+    // and it's fully paid. This is the only way an enquiry becomes Completed — it's never
+    // manually selectable (see SELECTABLE_STATUS above).
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const toComplete = enqRecords.filter(e =>
+      e.status === 'booked' &&
+      e.check_out && e.check_out < todayStr &&
+      (e.total_price || 0) > 0 &&
+      (e.amount_paid || 0) >= (e.total_price || 0)
+    )
+    if (toComplete.length > 0) {
+      await supabase.from('hc_enquiries')
+        .update({ status: 'completed' })
+        .in('id', toComplete.map(e => e.id))
+      const completedIds = new Set(toComplete.map(e => e.id))
+      enqRecords.forEach(e => { if (completedIds.has(e.id)) e.status = 'completed' })
+    }
+
     setEnquiries(enqRecords)
  
     // Merge sources from settings + sources already used in records
@@ -123,8 +156,10 @@ export const Enquiries: React.FC = () => {
     setInterests(mergedInterests)
     // Build price map for auto-fill
     const priceMap: Record<string, number | null> = {}
-    if (invData) invData.forEach((i: { name: string; base_price: number | null }) => { priceMap[i.name] = i.base_price })
+    const marMap: Record<string, number | null> = {}
+    if (invData) invData.forEach((i: { name: string; base_price: number | null; default_margin: number | null }) => { priceMap[i.name] = i.base_price; marMap[i.name] = i.default_margin })
     setInventoryMap(priceMap)
+    setMarginMap(marMap)
     setLoading(false)
   }, [user, tenantId])
  
@@ -258,6 +293,25 @@ export const Enquiries: React.FC = () => {
   // ── Add enquiry ────────────────────────────────────────
   const handleAdd = async (forceNewCustomer = false) => {
     if (!user || !addForm.name.trim()) { showToast('Name is required'); return }
+
+    // Gate: check-out cannot be before check-in (whenever both are filled in)
+    if (addForm.check_in && addForm.check_out && addForm.check_out < addForm.check_in) {
+      showToast('Check-out date cannot be before check-in date')
+      return
+    }
+
+    // Gate: cannot mark as Booked without check-in and check-out dates
+    if (addForm.status === 'booked' && (!addForm.check_in || !addForm.check_out)) {
+      showToast('Check-in and check-out dates are required before marking as Booked')
+      return
+    }
+
+    // Gate: cannot mark as Booked without an advance payment above zero
+    if (addForm.status === 'booked' && (Math.max(0, parseFloat(addForm.amount_paid) || 0) <= 0)) {
+      showToast('An advance payment is required before marking as Booked')
+      return
+    }
+
     setSaving(true)
  
     const totalPrice = Math.max(0, parseFloat(addForm.total_price) || 0)
@@ -304,11 +358,28 @@ export const Enquiries: React.FC = () => {
       guests:       Math.max(1, parseInt(addForm.guests) || 1),
       total_price:  totalPrice,
       amount_paid:  amountPaid,
+      margin:       addForm.margin ? Math.max(0, parseFloat(addForm.margin) || 0) : null,
       enquiry_date: addForm.enquiry_date || new Date().toISOString().slice(0, 10),
       conversation_log: [entry],
       created_by:   user.id,
       updated_by:   user.id,
     })
+
+    if (!addErr && addForm.status === 'booked' && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'enquiry_booked', entityType: 'enquiry', entityId: newId,
+        description: `${actor.actorName} created and booked an enquiry for ${addForm.name.trim()} (₹${Math.round(amountPaid).toLocaleString('en-IN')} of ₹${Math.round(totalPrice).toLocaleString('en-IN')} paid)`,
+      })
+    } else if (!addErr && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'enquiry_created', entityType: 'enquiry', entityId: newId,
+        description: `${actor.actorName} added a new enquiry for ${addForm.name.trim()}`,
+      })
+    }
     if (!addErr && addForm.status === 'booked') {
       const finId = crypto.randomUUID()
       const { error: finErr } = await supabase.from('hc_finance').insert({
@@ -346,6 +417,7 @@ export const Enquiries: React.FC = () => {
       guests:       String(e.guests),
       total_price:  String(e.total_price || 0),
       amount_paid:  String(e.amount_paid || 0),
+      margin:       String(e.margin || 0),
       enquiry_date: e.enquiry_date || e.created_at?.slice(0, 10) || '',
     })
     setNewNote('')
@@ -356,13 +428,26 @@ export const Enquiries: React.FC = () => {
     if (!panel || !user) return
     const totalPrice  = Math.max(0, parseFloat(editForm.total_price) || 0)
     const amountPaid  = Math.max(0, parseFloat(editForm.amount_paid) || 0)
+    const marginValue = editForm.margin ? Math.max(0, parseFloat(editForm.margin) || 0) : 0
     const balanceDue  = Math.max(0, totalPrice - amountPaid)
     const wasBooked   = panel.status !== 'booked' && editForm.status === 'booked'
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
  
-    // Gate: must enter advance payment amount before marking as Booked
-    if (wasBooked && editForm.amount_paid.trim() === '') {
-      showToast('Please enter advance payment amount (enter 0 if none)')
+    // Gate: check-out cannot be before check-in (whenever both are filled in)
+    if (editForm.check_in && editForm.check_out && editForm.check_out < editForm.check_in) {
+      showToast('Check-out date cannot be before check-in date')
+      return
+    }
+
+    // Gate: cannot mark as Booked without check-in and check-out dates
+    if (editForm.status === 'booked' && (!editForm.check_in || !editForm.check_out)) {
+      showToast('Check-in and check-out dates are required before marking as Booked')
+      return
+    }
+
+    // Gate: cannot mark as Booked without an advance payment above zero
+    if (editForm.status === 'booked' && amountPaid <= 0) {
+      showToast('An advance payment is required before marking as Booked')
       return
     }
  
@@ -378,10 +463,92 @@ export const Enquiries: React.FC = () => {
       guests:       Math.max(1, parseInt(editForm.guests) || 1),
       total_price:  totalPrice,
       amount_paid:  amountPaid,
+      margin:       marginValue,
       enquiry_date: editForm.enquiry_date || null,
       updated_by:   user.id,
       updated_at:   new Date().toISOString(),
     }).eq('id', panel.id)
+
+    // ── Activity log: covers every kind of change, with the most meaningful one taking priority ──
+    const wasCancelled       = panel.status !== 'cancelled'   && editForm.status === 'cancelled'
+    const wasMarkedNoResponse = panel.status !== 'noresponse' && editForm.status === 'noresponse'
+    const prevPaid      = panel.amount_paid || 0
+    const paymentChanged = amountPaid !== prevPaid
+
+    const FIELD_LABELS: Record<string, string> = {
+      name:'name', phone:'phone', email:'email', source:'source', interest:'property/stay',
+      check_in:'check-in', check_out:'check-out', guests:'guests', total_price:'total price', margin:'margin', enquiry_date:'enquiry date',
+    }
+    const changedFields: string[] = []
+    if (editForm.name !== panel.name) changedFields.push('name')
+    if ((editForm.phone || null) !== panel.phone) changedFields.push('phone')
+    if ((editForm.email || null) !== panel.email) changedFields.push('email')
+    if (editForm.source !== panel.source) changedFields.push('source')
+    if ((editForm.interest || null) !== panel.interest) changedFields.push('interest')
+    if ((editForm.check_in || null) !== panel.check_in) changedFields.push('check_in')
+    if ((editForm.check_out || null) !== panel.check_out) changedFields.push('check_out')
+    if (Math.max(1, parseInt(editForm.guests) || 1) !== panel.guests) changedFields.push('guests')
+    if (totalPrice !== (panel.total_price || 0)) changedFields.push('total_price')
+    if (marginValue !== (panel.margin || 0)) changedFields.push('margin')
+    if ((editForm.enquiry_date || null) !== panel.enquiry_date) changedFields.push('enquiry_date')
+
+    const actor = getActor({
+      userId: user.id, isOwner,
+      employeeName: employee?.name, ownerName: profile?.owner_name,
+    })
+
+    if (wasBooked) {
+      logActivity({
+        tenantId: panel.tenant_id, ...actor,
+        action: 'enquiry_booked', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} marked ${editForm.name}'s enquiry as Booked (₹${Math.round(amountPaid).toLocaleString('en-IN')} of ₹${Math.round(totalPrice).toLocaleString('en-IN')} paid)`,
+      })
+    } else if (wasCancelled) {
+      logActivity({
+        tenantId: panel.tenant_id, ...actor,
+        action: 'enquiry_cancelled', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} marked ${editForm.name}'s enquiry as Cancelled`,
+      })
+    } else if (wasMarkedNoResponse) {
+      logActivity({
+        tenantId: panel.tenant_id, ...actor,
+        action: 'enquiry_marked_noresponse', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} marked ${editForm.name}'s enquiry as No response`,
+      })
+    } else if (paymentChanged) {
+      logActivity({
+        tenantId: panel.tenant_id, ...actor,
+        action: 'enquiry_payment_changed', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} changed amount paid for ${editForm.name} from ₹${Math.round(prevPaid).toLocaleString('en-IN')} to ₹${Math.round(amountPaid).toLocaleString('en-IN')}`,
+      })
+    } else if (changedFields.length > 0) {
+      logActivity({
+        tenantId: panel.tenant_id, ...actor,
+        action: 'enquiry_edited', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} updated ${editForm.name}'s enquiry (${changedFields.map(f => FIELD_LABELS[f]).join(', ')})`,
+      })
+    }
+
+    // Keep linked customer record AND every other enquiry from the same customer in sync (name, phone, email)
+    if (panel.customer_id) {
+      const custUpdates: Record<string, string | null> = {}
+      if (editForm.name.trim() && editForm.name !== panel.name) custUpdates.name = editForm.name
+      if ((editForm.phone || null) !== panel.phone) custUpdates.phone = editForm.phone || null
+      if ((editForm.email || null) !== panel.email) custUpdates.email = editForm.email || null
+
+      if (Object.keys(custUpdates).length > 0) {
+        const now = new Date().toISOString()
+        custUpdates.updated_at = now
+
+        await supabase.from('hc_customers').update(custUpdates).eq('id', panel.customer_id)
+
+        // Propagate to every other enquiry from this same customer (the current one is already updated above)
+        await supabase.from('hc_enquiries')
+          .update(custUpdates)
+          .eq('customer_id', panel.customer_id)
+          .neq('id', panel.id)
+      }
+    }
  
     // Handle income draft
     const { data: existingDrafts } = await supabase
@@ -434,8 +601,17 @@ export const Enquiries: React.FC = () => {
       added_by: user.id,
     }
     const updatedLog = [entry, ...(panel.conversation_log || [])]
-    await supabase.from('hc_enquiries').update({ conversation_log: updatedLog }).eq('id', panel.id)
-    setPanel({ ...panel, conversation_log: updatedLog })
+    const now = new Date().toISOString()
+    await supabase.from('hc_enquiries').update({ conversation_log: updatedLog, updated_at: now, updated_by: user.id }).eq('id', panel.id)
+    if (tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'enquiry_note_added', entityType: 'enquiry', entityId: panel.id,
+        description: `${actor.actorName} added a follow-up note for ${panel.name}`,
+      })
+    }
+    setPanel({ ...panel, conversation_log: updatedLog, updated_at: now })
     setNewNote('')
     load()
     showToast('Note added')
@@ -445,6 +621,14 @@ export const Enquiries: React.FC = () => {
   const deleteEnquiry = async (id: string, name: string) => {
     if (!confirm(`Delete enquiry for ${name}? This cannot be undone.`)) return
     await supabase.from('hc_enquiries').delete().eq('id', id)
+    if (user && tenantId) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'enquiry_deleted', entityType: 'enquiry', entityId: id,
+        description: `${actor.actorName} deleted the enquiry for ${name}`,
+      })
+    }
     if (panel?.id === id) setPanel(null)
     load()
     showToast(name + ' deleted')
@@ -452,6 +636,7 @@ export const Enquiries: React.FC = () => {
  
   // ── Export ─────────────────────────────────────────────
   const exportExcel = () => {
+    if (!isOwner) { showToast('Only the owner can export data'); return }
     if (displayed.length === 0) { showToast('No enquiries to export'); return }
     const rows = displayed.map(e => ({
       Name:         e.name,
@@ -502,7 +687,7 @@ export const Enquiries: React.FC = () => {
             <option value="">All months</option>
             {MONTHS.map((m, i) => <option key={m} value={i}>{m} {new Date().getFullYear()}</option>)}
           </select>
-          <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>
+          {isOwner && <button onClick={exportExcel} style={{ padding:'7px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>↓ Excel</button>}
           <button onClick={() => setShowAdd(v => !v)} style={{ padding:'7px 16px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>+ Add enquiry</button>
         </div>
       </div>
@@ -626,7 +811,8 @@ export const Enquiries: React.FC = () => {
                   <select value={addForm.interest} onChange={e => {
                     const name = e.target.value
                     const price = inventoryMap[name]
-                    setAddForm(f => ({ ...f, interest: name, ...(price ? { total_price: String(price) } : {}) }))
+                    const margin = marginMap[name]
+                    setAddForm(f => ({ ...f, interest: name, ...(price ? { total_price: String(price) } : {}), ...(margin ? { margin: String(margin) } : {}) }))
                   }} style={inp}>
                     <option value="">Select property / package...</option>
                     {interests.map(i => <option key={i} value={i}>{i}</option>)}
@@ -687,6 +873,7 @@ export const Enquiries: React.FC = () => {
                 ['Guests',        'guests',       'number', '1'],
                 ['Total price ₹', 'total_price',  'number', '0'],
                 ['Amount paid ₹', 'amount_paid',  'number', '0'],
+                ['Margin ₹',      'margin',       'number', '0'],
               ] as [string,string,string,string][]).map(([l, k, t, p]) => (
                 <div key={k}>
                   <label style={lbl}>{l}</label>
@@ -701,7 +888,7 @@ export const Enquiries: React.FC = () => {
             <div style={{ marginBottom:'10px' }}>
               <label style={lbl}>Status</label>
               <div style={{ display:'flex', flexWrap:'wrap', gap:'6px' }}>
-                {Object.entries(STATUS).map(([k, v]) => (
+                {Object.entries(SELECTABLE_STATUS).map(([k, v]) => (
                   <button key={k} onClick={() => setAddForm(f => ({ ...f, status: k }))}
                     style={{ padding:'5px 12px', borderRadius:'20px', border:'1px solid', borderColor:addForm.status===k?'#17341e':'#e5e7eb', background:addForm.status===k?'#17341e':'#ffffff', color:addForm.status===k?'#ffffff':'#374151', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
                     {v.label}
@@ -800,7 +987,13 @@ export const Enquiries: React.FC = () => {
                         </td>
                         <td style={{ padding:'11px 14px' }}><Badge status={e.status} /></td>
                         <td style={{ padding:'11px 14px' }}>
-                          <div style={{ display:'flex', gap:'6px' }}>
+                          <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
+                            {isStaleContacted(e) && (
+                              <button onClick={() => openPanel(e)} title="No activity for 10+ days — follow up or update status"
+                                style={{ padding:'5px 11px', background:'#fef3c7', color:'#92400e', border:'1px solid #fcd34d', borderRadius:'7px', fontSize:'11px', fontWeight:600, cursor:'pointer' }}>
+                                ⚠ Needs action
+                              </button>
+                            )}
                             <button onClick={() => openPanel(e)} style={{ padding:'5px 11px', background:'#dbeafe', color:'#1e40af', border:'1px solid #93c5fd', borderRadius:'7px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Edit</button>
                             <button onClick={() => deleteEnquiry(e.id, e.name)} style={{ padding:'5px 11px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'7px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Delete</button>
                           </div>
@@ -918,7 +1111,8 @@ export const Enquiries: React.FC = () => {
                     <select value={editForm.interest} onChange={e => {
                       const name = e.target.value
                       const price = inventoryMap[name]
-                      setEditForm(f => ({ ...f, interest: name, ...(price && !f.total_price ? { total_price: String(price) } : {}) }))
+                      const margin = marginMap[name]
+                      setEditForm(f => ({ ...f, interest: name, ...(price && !f.total_price ? { total_price: String(price) } : {}), ...(margin && (!f.margin || f.margin === '0') ? { margin: String(margin) } : {}) }))
                     }} style={inp}>
                       <option value="">Select property / package...</option>
                       {interests.map(i => <option key={i} value={i}>{i}</option>)}
@@ -950,6 +1144,10 @@ export const Enquiries: React.FC = () => {
                     <label style={{ ...lbl, color:'#9ca3af' }}>Amount paid ₹</label>
                     <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
                   </div>
+                  <div>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Margin ₹</label>
+                    <input type="number" min="0" value={editForm.margin} onChange={e => setEditForm(f => ({ ...f, margin: e.target.value }))} style={inp} />
+                  </div>
                 </div>
                 {(() => {
                   const total   = parseFloat(editForm.total_price) || 0
@@ -969,14 +1167,20 @@ export const Enquiries: React.FC = () => {
               {/* Status */}
               <div style={{ marginBottom:'14px' }}>
                 <label style={{ ...lbl, color:'#9ca3af' }}>Status</label>
-                <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
-                  {Object.entries(STATUS).map(([k, v]) => (
-                    <button key={k} onClick={() => setEditForm(f => ({ ...f, status: k }))}
-                      style={{ padding:'5px 10px', borderRadius:'20px', border:'1px solid', borderColor:editForm.status===k?'#17341e':'#e5e7eb', background:editForm.status===k?'#17341e':'#ffffff', color:editForm.status===k?'#ffffff':'#374151', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
-                      {v.label}
-                    </button>
-                  ))}
-                </div>
+                {editForm.status === 'completed' ? (
+                  <div style={{ fontSize:'11px', color:'#065f46', background:'#d1fae5', display:'inline-block', padding:'5px 10px', borderRadius:'20px' }}>
+                    ✓ Completed — set automatically once fully paid and checked out
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
+                    {Object.entries(SELECTABLE_STATUS).map(([k, v]) => (
+                      <button key={k} onClick={() => setEditForm(f => ({ ...f, status: k }))}
+                        style={{ padding:'5px 10px', borderRadius:'20px', border:'1px solid', borderColor:editForm.status===k?'#17341e':'#e5e7eb', background:editForm.status===k?'#17341e':'#ffffff', color:editForm.status===k?'#ffffff':'#374151', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
  
               {/* Conversation log */}
