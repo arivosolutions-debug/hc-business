@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, fmt } from '../lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
@@ -12,6 +13,14 @@ interface UpcomingEntry {
   check_in: string | null; check_out: string | null; guests: number; phone: string | null
 }
  
+interface PrevStats {
+  totalLeads: number
+  booked: number
+  revenue: number
+  expenses: number
+  margin: number
+}
+
 interface Stats {
   checkIns: number
   checkOuts: number
@@ -21,17 +30,37 @@ interface Stats {
   revenue: number
   expenses: number
   margin: number
-  chartData: { month: string; revenue: number; expenses: number }[]
+  chartData: { month: string; revenue: number; expenses: number; monthIndex: number; year: number }[]
   sources: { source: string; count: number }[]
   upcomingCheckIns: UpcomingEntry[]
   upcomingCheckOuts: UpcomingEntry[]
+  prev: PrevStats
 }
- 
-const KPICard = ({ label, value, dot }: { label: string; value: string; dot: string }) => (
-  <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'16px' }}>
-    <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'12px' }}>
-      <div style={{ width:'7px', height:'7px', borderRadius:'50%', background:dot }} />
-      <span style={{ fontSize:'11px', color:'#6b7280' }}>{label}</span>
+
+// Small ↑/↓ delta badge — compares current vs previous-period value
+const DeltaBadge = ({ current, previous }: { current: number; previous: number }) => {
+  if (previous === 0 && current === 0) return null
+  if (previous === 0) return <span style={{ fontSize:'10px', fontWeight:500, color:'#22c55e' }}>New</span>
+  const pct = Math.round(((current - previous) / previous) * 100)
+  if (pct === 0) return <span style={{ fontSize:'10px', fontWeight:500, color:'#9ca3af' }}>—</span>
+  const up = pct > 0
+  return (
+    <span style={{ fontSize:'10px', fontWeight:500, color: up ? '#22c55e' : '#dc2626', display:'inline-flex', alignItems:'center', gap:'2px' }}>
+      {up ? '↑' : '↓'} {Math.abs(pct)}%
+    </span>
+  )
+}
+
+const KPICard = ({ label, value, dot, delta, onClick }: { label: string; value: string; dot: string; delta?: React.ReactNode; onClick?: () => void }) => (
+  <div onClick={onClick} style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'16px', cursor: onClick ? 'pointer' : 'default', transition:'box-shadow 0.15s, border-color 0.15s' }}
+    onMouseEnter={e => { if (onClick) { e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'; e.currentTarget.style.borderColor = '#d1d5db' } }}
+    onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.borderColor = '#e5e7eb' }}>
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+        <div style={{ width:'7px', height:'7px', borderRadius:'50%', background:dot }} />
+        <span style={{ fontSize:'11px', color:'#6b7280' }}>{label}</span>
+      </div>
+      {delta}
     </div>
     <div style={{ fontSize:'22px', fontWeight:500, color:'#111111', lineHeight:1 }}>{value}</div>
   </div>
@@ -114,6 +143,8 @@ async function buildChartData(tenantId: string, filter: FilterValue) {
     ])
     chartData.push({
       month: MONTHS[month].slice(0, 3),
+      monthIndex: month,
+      year,
       revenue:  inc?.reduce((s, r) => s + (r.amount || 0), 0) || 0,
       expenses: exp?.reduce((s, r) => s + (r.amount || 0), 0) || 0,
     })
@@ -122,7 +153,8 @@ async function buildChartData(tenantId: string, filter: FilterValue) {
 }
  
 export const Dashboard: React.FC = () => {
-  const { user, tenantId } = useAuth()
+  const { user, tenantId, isOwner } = useAuth()
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<FilterValue>(`month:${CUR_MONTH}`)
   const [stats, setStats] = useState<Stats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -133,6 +165,16 @@ export const Dashboard: React.FC = () => {
     setLoading(true)
  
     const { first, last } = getDateRange(filter)
+
+    // Previous period = same-length window immediately preceding the current one,
+    // used for the month-over-month comparison arrows on KPI cards.
+    const prevLastDate = new Date(first)
+    prevLastDate.setDate(prevLastDate.getDate() - 1)
+    const rangeDays = Math.round((new Date(last).getTime() - new Date(first).getTime()) / 86400000) + 1
+    const prevFirstDate = new Date(prevLastDate)
+    prevFirstDate.setDate(prevFirstDate.getDate() - (rangeDays - 1))
+    const prevFirst = prevFirstDate.toISOString().slice(0, 10)
+    const prevLast  = prevLastDate.toISOString().slice(0, 10)
  
     // All queries use the same date range — every metric reflects the selected period
     const [
@@ -227,6 +269,34 @@ export const Dashboard: React.FC = () => {
         .order('check_out', { ascending: true }),
     ])
  
+    // Previous-period stats — powers the month-over-month comparison arrows
+    const [
+      { count: prevTotalLeads },
+      { count: prevBooked },
+      { data: prevIncData },
+      { data: prevExpData },
+      { data: prevMarginData },
+    ] = await Promise.all([
+      supabase.from('hc_enquiries').select('*', { count:'exact', head:true })
+        .eq('tenant_id', tenantId)
+        .gte('enquiry_date', prevFirst).lte('enquiry_date', prevLast),
+      supabase.from('hc_enquiries').select('*', { count:'exact', head:true })
+        .eq('tenant_id', tenantId).in('status', ['booked', 'completed'])
+        .gte('enquiry_date', prevFirst).lte('enquiry_date', prevLast),
+      supabase.from('hc_finance').select('amount')
+        .eq('tenant_id', tenantId).eq('type', 'income').eq('status', 'confirmed')
+        .gte('date', prevFirst).lte('date', prevLast),
+      supabase.from('hc_finance').select('amount')
+        .eq('tenant_id', tenantId).eq('type', 'expense')
+        .gte('date', prevFirst).lte('date', prevLast),
+      supabase.from('hc_enquiries').select('margin')
+        .eq('tenant_id', tenantId).in('status', ['booked', 'completed'])
+        .gte('enquiry_date', prevFirst).lte('enquiry_date', prevLast),
+    ])
+
+    const prevRevenue  = prevIncData?.reduce((s, r) => s + (r.amount || 0), 0) || 0
+    const prevExpenses = prevExpData?.reduce((s, r) => s + (r.amount || 0), 0) || 0
+
     setStats({
       checkIns:   ci || 0,
       checkOuts:  co || 0,
@@ -240,6 +310,13 @@ export const Dashboard: React.FC = () => {
       sources,
       upcomingCheckIns:  (upIn  as UpcomingEntry[]) || [],
       upcomingCheckOuts: (upOut as UpcomingEntry[]) || [],
+      prev: {
+        totalLeads: prevTotalLeads || 0,
+        booked:     prevBooked || 0,
+        revenue:    prevRevenue,
+        expenses:   prevExpenses,
+        margin:     prevMarginData?.reduce((s, r) => s + (r.margin || 0), 0) || 0,
+      },
     })
     setMarginInUse((marginUsedCount || 0) > 0)
     setLoading(false)
@@ -249,7 +326,8 @@ export const Dashboard: React.FC = () => {
  
   const conv   = stats && stats.totalLeads > 0 ? Math.round((stats.booked / stats.totalLeads) * 100) : 0
   const profit = stats ? stats.revenue - stats.expenses : 0
-  const { label: revenueLabel } = getDateRange(filter)
+  const prevProfit = stats ? stats.prev.revenue - stats.prev.expenses : 0
+  const { first: periodFirst, last: periodLast, label: revenueLabel } = getDateRange(filter)
  
   // Build filter label for today strip
   const filterLabel = (() => {
@@ -297,12 +375,16 @@ export const Dashboard: React.FC = () => {
             {/* Today strip */}
             <div className="dash-hero">
               {[
-                { v: stats!.checkIns,     l:`Check-ins — ${filterLabel}`,      c:'#ffffff' },
-                { v: stats!.checkOuts,    l:`Check-outs — ${filterLabel}`,     c:'#ffffff' },
-                { v: stats!.uncontacted,  l:`Uncontacted — ${filterLabel}`,    c:'#fde68a' },
-                { v: fmt(stats!.revenue), l: revenueLabel,                     c:'#ffffff' },
+                { v: stats!.checkIns,     l:`Check-ins — ${filterLabel}`,      c:'#ffffff',
+                  onClick: () => navigate('/enquiries', { state: { checkInFrom: periodFirst, checkInTo: periodLast, status: 'contacted,booked,completed,noresponse', label: `Check-ins — ${filterLabel}` } }) },
+                { v: stats!.checkOuts,    l:`Check-outs — ${filterLabel}`,     c:'#ffffff',
+                  onClick: () => navigate('/enquiries', { state: { checkOutFrom: periodFirst, checkOutTo: periodLast, label: `Check-outs — ${filterLabel}` } }) },
+                { v: stats!.uncontacted,  l:`Uncontacted — ${filterLabel}`,    c:'#fde68a',
+                  onClick: () => navigate('/enquiries', { state: { status: 'contacted', enqDateFrom: periodFirst, enqDateTo: periodLast, label: `Uncontacted — ${filterLabel}` } }) },
+                { v: fmt(stats!.revenue), l: revenueLabel,                     c:'#ffffff',
+                  onClick: () => navigate('/income', { state: { dateFrom: periodFirst, dateTo: periodLast, label: revenueLabel } }) },
               ].map(t => (
-                <div key={t.l}>
+                <div key={t.l} onClick={t.onClick} style={{ cursor:'pointer' }}>
                   <div style={{ fontSize:'22px', fontWeight:500, color:t.c, lineHeight:1, marginBottom:'5px' }}>{t.v}</div>
                   <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.45)', lineHeight:1.4 }}>{t.l}</div>
                 </div>
@@ -311,11 +393,18 @@ export const Dashboard: React.FC = () => {
  
             {/* KPI cards */}
             <div className="grid-4" style={{ marginBottom:'14px' }}>
-              <KPICard label={`Total leads — ${filterLabel}`}     value={String(stats!.totalLeads)} dot="#3b82f6" />
+              <KPICard label={`Total leads — ${filterLabel}`}     value={String(stats!.totalLeads)} dot="#3b82f6"
+                delta={<DeltaBadge current={stats!.totalLeads} previous={stats!.prev.totalLeads} />}
+                onClick={() => navigate('/enquiries', { state: { enqDateFrom: periodFirst, enqDateTo: periodLast, label: `Total leads — ${filterLabel}` } })} />
               <KPICard label={`Conversion — ${filterLabel}`}      value={`${conv}%`}               dot="#22c55e" />
-              <KPICard label={`Revenue — ${filterLabel}`}         value={fmt(stats!.revenue)}       dot="#f97316" />
-              <KPICard label={`Net profit — ${filterLabel}`}      value={fmt(profit)}               dot="#a855f7" />
-              {marginInUse && <KPICard label={`Margin — ${filterLabel}`} value={fmt(stats!.margin)}  dot="#14b8a6" />}
+              <KPICard label={`Revenue — ${filterLabel}`}         value={fmt(stats!.revenue)}       dot="#f97316"
+                delta={<DeltaBadge current={stats!.revenue} previous={stats!.prev.revenue} />}
+                onClick={() => navigate('/income', { state: { dateFrom: periodFirst, dateTo: periodLast, label: revenueLabel } })} />
+              <KPICard label={`Net profit — ${filterLabel}`}      value={fmt(profit)}               dot="#a855f7"
+                delta={<DeltaBadge current={profit} previous={prevProfit} />} />
+              {isOwner && marginInUse && <KPICard label={`Margin — ${filterLabel}`} value={fmt(stats!.margin)}  dot="#14b8a6"
+                delta={<DeltaBadge current={stats!.margin} previous={stats!.prev.margin} />}
+                onClick={() => navigate('/enquiries', { state: { status: 'booked,completed', enqDateFrom: periodFirst, enqDateTo: periodLast, label: `Booked & completed — ${filterLabel}` } })} />}
             </div>
  
             {/* Upcoming 7 days strip */}
@@ -331,7 +420,8 @@ export const Dashboard: React.FC = () => {
                   {stats!.upcomingCheckIns.length === 0
                     ? <div style={{ fontSize:'12px', color:'#9ca3af' }}>No check-ins this week</div>
                     : stats!.upcomingCheckIns.map(e => (
-                      <div key={e.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6' }}>
+                      <div key={e.id} onClick={() => navigate('/enquiries', { state: { openEnquiryId: e.id, label: `${e.name} — check-in` } })}
+                        style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6', cursor:'pointer' }}>
                         <div>
                           <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>{e.name}</div>
                           <div style={{ fontSize:'11px', color:'#9ca3af' }}>{e.interest || '—'} · {e.guests} guest{e.guests !== 1 ? 's' : ''}</div>
@@ -357,7 +447,8 @@ export const Dashboard: React.FC = () => {
                   {stats!.upcomingCheckOuts.length === 0
                     ? <div style={{ fontSize:'12px', color:'#9ca3af' }}>No check-outs this week</div>
                     : stats!.upcomingCheckOuts.map(e => (
-                      <div key={e.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6' }}>
+                      <div key={e.id} onClick={() => navigate('/enquiries', { state: { openEnquiryId: e.id, label: `${e.name} — check-out` } })}
+                        style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6', cursor:'pointer' }}>
                         <div>
                           <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>{e.name}</div>
                           <div style={{ fontSize:'11px', color:'#9ca3af' }}>{e.interest || '—'} · {e.guests} guest{e.guests !== 1 ? 's' : ''}</div>
@@ -405,8 +496,10 @@ export const Dashboard: React.FC = () => {
                         formatter={(v: number, name: string) => [fmt(v), name === 'revenue' ? 'Income' : 'Expenses']}
                         contentStyle={{ borderRadius:'8px', border:'1px solid #e5e7eb', fontSize:'11px' }}
                       />
-                      <Bar dataKey="revenue"  name="Income"   fill="#17341e" radius={[4,4,0,0]} />
-                      <Bar dataKey="expenses" name="Expenses" fill="#f0997b" radius={[4,4,0,0]} />
+                      <Bar dataKey="revenue"  name="Income"   fill="#17341e" radius={[4,4,0,0]} style={{ cursor:'pointer' }}
+                        onClick={(data: { monthIndex: number; year: number }) => { if (data.year === CUR_YEAR) setFilter(`month:${data.monthIndex}` as FilterValue) }} />
+                      <Bar dataKey="expenses" name="Expenses" fill="#f0997b" radius={[4,4,0,0]} style={{ cursor:'pointer' }}
+                        onClick={(data: { monthIndex: number; year: number }) => { if (data.year === CUR_YEAR) setFilter(`month:${data.monthIndex}` as FilterValue) }} />
                     </BarChart>
                   </ResponsiveContainer>
                 )}
@@ -419,7 +512,8 @@ export const Dashboard: React.FC = () => {
                 {stats!.sources.length === 0 ? (
                   <div style={{ fontSize:'12px', color:'#9ca3af', textAlign:'center', padding:'20px 0' }}>No leads in this period</div>
                 ) : stats!.sources.slice(0, 6).map(s => (
-                  <div key={s.source} style={{ marginBottom:'10px' }}>
+                  <div key={s.source} onClick={() => navigate('/enquiries', { state: { source: s.source, enqDateFrom: periodFirst, enqDateTo: periodLast, label: `${s.source} — ${filterLabel}` } })}
+                    style={{ marginBottom:'10px', cursor:'pointer' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', fontSize:'12px', marginBottom:'4px' }}>
                       <span style={{ color:'#374151' }}>{s.source}</span>
                       <span style={{ color:'#9ca3af' }}>{Math.round(s.count / (stats!.totalLeads || 1) * 100)}%</span>

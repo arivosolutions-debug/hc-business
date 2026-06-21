@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCFinance, HCProfile, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
@@ -192,13 +193,33 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
 // ── Main Income component ──────────────────────────────────────
 export const Income: React.FC = () => {
   const { user, tenantId, isOwner, profile: authProfile, employee } = useAuth()
+  const location = useLocation()
   const [records, setRecords]   = useState<HCFinance[]>([])
   const [profile, setProfile]   = useState<HCProfile | null>(null)
   const [loading, setLoading]   = useState(true)
   const [filterMonth, setFilterMonth]     = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterInterest, setFilterInterest] = useState('')
+  // Drill-down filters — only ever set by navigating in from the Dashboard
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [drillLabel, setDrillLabel] = useState('')
   const [interests, setInterests]         = useState<string[]>([])
+
+  // Apply drill-down filters passed in via navigation from the Dashboard (runs once on mount)
+  useEffect(() => {
+    const incoming = location.state as { dateFrom?: string; dateTo?: string; label?: string } | null
+    if (!incoming) return
+    if (incoming.dateFrom) setDateFrom(incoming.dateFrom)
+    if (incoming.dateTo) setDateTo(incoming.dateTo)
+    if (incoming.label) setDrillLabel(incoming.label)
+    window.history.replaceState({}, '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const clearDrillDown = () => {
+    setDateFrom(''); setDateTo(''); setDrillLabel('')
+  }
   const [currentPage, setCurrentPage]     = useState(1)
   const [showAdd, setShowAdd]   = useState(false)
   const [addForm, setAddForm]   = useState({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
@@ -278,6 +299,8 @@ export const Income: React.FC = () => {
     if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
     if (filterPayment && r.payment_type !== filterPayment) return false
     if (filterInterest && r.enquiry?.interest !== filterInterest) return false
+    if (dateFrom && r.date < dateFrom) return false
+    if (dateTo && r.date > dateTo) return false
     return true
   })
  
@@ -481,6 +504,14 @@ export const Income: React.FC = () => {
  
       {/* Content */}
       <div className="page-content">
+
+        {/* Drill-down banner — shown when arrived from a Dashboard click-through */}
+        {drillLabel && (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'9px 14px', marginBottom:'14px' }}>
+            <span style={{ fontSize:'12px', color:'#1e40af' }}>Showing: <strong>{drillLabel}</strong></span>
+            <button onClick={clearDrillDown} style={{ background:'none', border:'none', color:'#1e40af', fontSize:'12px', fontWeight:500, cursor:'pointer', textDecoration:'underline' }}>Clear filter</button>
+          </div>
+        )}
  
         {/* Manual add form */}
         {showAdd && (

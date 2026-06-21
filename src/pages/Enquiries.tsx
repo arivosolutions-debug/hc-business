@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCEnquiry, HCCustomer, fmtDate, STATUS_ORDER, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
@@ -42,12 +43,44 @@ const isStaleContacted = (e: HCEnquiry) => {
 const BLANK = () => ({
   name:'', phone:'', email:'', source:'WhatsApp DM', status:'contacted',
   interest:'', check_in:'', check_out:'', guests:'1',
-  total_price:'', amount_paid:'0', margin:'', notes:'',
+  total_price:'', amount_paid:'0', discount:'0', notes:'',
   enquiry_date: new Date().toISOString().slice(0, 10),
 })
  
 export const Enquiries: React.FC = () => {
   const { user, tenantId, isOwner, profile, employee } = useAuth()
+  const location = useLocation()
+
+  // Apply drill-down filters passed in via navigation from the Dashboard (runs once on mount)
+  useEffect(() => {
+    const incoming = location.state as {
+      status?: string; source?: string
+      enqDateFrom?: string; enqDateTo?: string
+      checkInFrom?: string; checkInTo?: string
+      checkOutFrom?: string; checkOutTo?: string
+      openEnquiryId?: string; label?: string
+    } | null
+    if (!incoming) return
+    if (incoming.status) setFilterStatus(incoming.status)
+    if (incoming.source) setFilterSource(incoming.source)
+    if (incoming.enqDateFrom) setEnqDateFrom(incoming.enqDateFrom)
+    if (incoming.enqDateTo) setEnqDateTo(incoming.enqDateTo)
+    if (incoming.checkInFrom) setDateFrom(incoming.checkInFrom)
+    if (incoming.checkInTo) setDateTo(incoming.checkInTo)
+    if (incoming.checkOutFrom) setCheckOutFrom(incoming.checkOutFrom)
+    if (incoming.checkOutTo) setCheckOutTo(incoming.checkOutTo)
+    if (incoming.openEnquiryId) setPendingOpenId(incoming.openEnquiryId)
+    if (incoming.label) setDrillLabel(incoming.label)
+    // Clear navigation state so a page refresh doesn't re-apply it
+    window.history.replaceState({}, '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const clearDrillDown = () => {
+    setFilterStatus(''); setFilterSource(''); setFilterMonth('')
+    setDateFrom(''); setDateTo(''); setEnqDateFrom(''); setEnqDateTo('')
+    setCheckOutFrom(''); setCheckOutTo(''); setDrillLabel('')
+  }
   const [enquiries, setEnquiries] = useState<HCEnquiry[]>([])
   const [loading, setLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('')
@@ -55,6 +88,13 @@ export const Enquiries: React.FC = () => {
   const [filterMonth, setFilterMonth] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  // Drill-down filters — only ever set by navigating in from the Dashboard, not exposed in the manual filter bar
+  const [enqDateFrom, setEnqDateFrom] = useState('')
+  const [enqDateTo, setEnqDateTo] = useState('')
+  const [checkOutFrom, setCheckOutFrom] = useState('')
+  const [checkOutTo, setCheckOutTo] = useState('')
+  const [drillLabel, setDrillLabel] = useState('')
+  const [pendingOpenId, setPendingOpenId] = useState('')
   const [page, setPage] = useState(1)
  
   const [showAdd, setShowAdd] = useState(false)
@@ -197,7 +237,7 @@ export const Enquiries: React.FC = () => {
  
   // ── Filtering + sort by status ─────────────────────────
   const filtered = enquiries.filter(e => {
-    if (filterStatus && e.status !== filterStatus) return false
+    if (filterStatus && !filterStatus.split(',').includes(e.status)) return false
     if (filterSource && e.source !== filterSource) return false
     if (filterMonth !== '') {
       const d = e.enquiry_date || e.created_at
@@ -205,6 +245,13 @@ export const Enquiries: React.FC = () => {
     }
     if (dateFrom && e.check_in && e.check_in < dateFrom) return false
     if (dateTo && e.check_in && e.check_in > dateTo) return false
+    if (checkOutFrom && e.check_out && e.check_out < checkOutFrom) return false
+    if (checkOutTo && e.check_out && e.check_out > checkOutTo) return false
+    if (enqDateFrom || enqDateTo) {
+      const d = e.enquiry_date || e.created_at?.slice(0, 10) || ''
+      if (enqDateFrom && d < enqDateFrom) return false
+      if (enqDateTo && d > enqDateTo) return false
+    }
     return true
   })
  
@@ -294,20 +341,40 @@ export const Enquiries: React.FC = () => {
   const handleAdd = async (forceNewCustomer = false) => {
     if (!user || !addForm.name.trim()) { showToast('Name is required'); return }
 
+    // Gate: a Contacted enquiry must have a phone number on file
+    if (addForm.status === 'contacted' && !addForm.phone.trim()) {
+      showToast('Phone number is required')
+      return
+    }
+
     // Gate: check-out cannot be before check-in (whenever both are filled in)
     if (addForm.check_in && addForm.check_out && addForm.check_out < addForm.check_in) {
       showToast('Check-out date cannot be before check-in date')
       return
     }
 
+    // Auto-promote: a Contacted enquiry with dates and a payment already filled in
+    // moves straight to Booked, no manual status switch needed.
+    let finalStatus = addForm.status
+    if (finalStatus === 'contacted') {
+      const hasDates   = !!(addForm.check_in && addForm.check_out)
+      const hasPayment = Math.max(0, parseFloat(addForm.amount_paid) || 0) > 0
+      if (hasDates && hasPayment) {
+        finalStatus = 'booked'
+      } else if (hasPayment && !hasDates) {
+        showToast('Add check-in and check-out dates to mark this as Booked')
+        return
+      }
+    }
+
     // Gate: cannot mark as Booked without check-in and check-out dates
-    if (addForm.status === 'booked' && (!addForm.check_in || !addForm.check_out)) {
+    if (finalStatus === 'booked' && (!addForm.check_in || !addForm.check_out)) {
       showToast('Check-in and check-out dates are required before marking as Booked')
       return
     }
 
     // Gate: cannot mark as Booked without an advance payment above zero
-    if (addForm.status === 'booked' && (Math.max(0, parseFloat(addForm.amount_paid) || 0) <= 0)) {
+    if (finalStatus === 'booked' && (Math.max(0, parseFloat(addForm.amount_paid) || 0) <= 0)) {
       showToast('An advance payment is required before marking as Booked')
       return
     }
@@ -326,16 +393,16 @@ export const Enquiries: React.FC = () => {
       const nameDiffers = existingCustomer.name.toLowerCase().trim() !== addForm.name.toLowerCase().trim()
       if (nameDiffers) {
         setDupCustomer(existingCustomer)
-        setPendingSave(() => () => doAddEnquiry(customerId, totalPrice, amountPaid))
+        setPendingSave(() => () => doAddEnquiry(customerId, totalPrice, amountPaid, finalStatus))
         setSaving(false)
         return
       }
     }
  
-    await doAddEnquiry(customerId, totalPrice, amountPaid)
+    await doAddEnquiry(customerId, totalPrice, amountPaid, finalStatus)
   }
  
-  const doAddEnquiry = async (customerId: string | null, totalPrice: number, amountPaid: number) => {
+  const doAddEnquiry = async (customerId: string | null, totalPrice: number, amountPaid: number, finalStatus: string) => {
     if (!user) return
     const entry = {
       date: new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short' }),
@@ -351,21 +418,22 @@ export const Enquiries: React.FC = () => {
       phone:        addForm.phone || null,
       email:        addForm.email || null,
       source:       addForm.source,
-      status:       addForm.status,
+      status:       finalStatus,
       interest:     addForm.interest || null,
       check_in:     addForm.check_in || null,
       check_out:    addForm.check_out || null,
       guests:       Math.max(1, parseInt(addForm.guests) || 1),
       total_price:  totalPrice,
       amount_paid:  amountPaid,
-      margin:       addForm.margin ? Math.max(0, parseFloat(addForm.margin) || 0) : null,
+      discount:     Math.max(0, parseFloat(addForm.discount) || 0),
+      margin:       Math.max(0, (marginMap[addForm.interest] || 0) - (Math.max(0, parseFloat(addForm.discount) || 0))),
       enquiry_date: addForm.enquiry_date || new Date().toISOString().slice(0, 10),
       conversation_log: [entry],
       created_by:   user.id,
       updated_by:   user.id,
     })
 
-    if (!addErr && addForm.status === 'booked' && tenantId) {
+    if (!addErr && finalStatus === 'booked' && tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
       logActivity({
         tenantId, ...actor,
@@ -380,7 +448,7 @@ export const Enquiries: React.FC = () => {
         description: `${actor.actorName} added a new enquiry for ${addForm.name.trim()}`,
       })
     }
-    if (!addErr && addForm.status === 'booked') {
+    if (!addErr && finalStatus === 'booked') {
       const finId = crypto.randomUUID()
       const { error: finErr } = await supabase.from('hc_finance').insert({
         id: finId, tenant_id: tenantId, type: 'income',
@@ -399,7 +467,7 @@ export const Enquiries: React.FC = () => {
     setDupCustomer(null)
     setPendingSave(null)
     load()
-    showToast(addForm.name + ' added')
+    showToast(addForm.name + (finalStatus === 'booked' && addForm.status !== 'booked' ? ' added — automatically marked as Booked' : ' added'))
   }
  
   // ── Open edit panel ────────────────────────────────────
@@ -417,20 +485,38 @@ export const Enquiries: React.FC = () => {
       guests:       String(e.guests),
       total_price:  String(e.total_price || 0),
       amount_paid:  String(e.amount_paid || 0),
-      margin:       String(e.margin || 0),
+      discount:     String(e.discount || 0),
       enquiry_date: e.enquiry_date || e.created_at?.slice(0, 10) || '',
     })
     setNewNote('')
   }
+
+  // Auto-open a specific enquiry's panel when navigated in from the Dashboard
+  useEffect(() => {
+    if (!pendingOpenId || enquiries.length === 0) return
+    const target = enquiries.find(e => e.id === pendingOpenId)
+    if (target) {
+      openPanel(target)
+      setPendingOpenId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpenId, enquiries])
  
   // ── Save edit panel ────────────────────────────────────
   const savePanel = async () => {
     if (!panel || !user) return
+
+    // Gate: a Contacted enquiry must have a phone number on file
+    if (editForm.status === 'contacted' && !editForm.phone.trim()) {
+      showToast('Phone number is required')
+      return
+    }
+
     const totalPrice  = Math.max(0, parseFloat(editForm.total_price) || 0)
     const amountPaid  = Math.max(0, parseFloat(editForm.amount_paid) || 0)
-    const marginValue = editForm.margin ? Math.max(0, parseFloat(editForm.margin) || 0) : 0
+    const discountValue = Math.max(0, parseFloat(editForm.discount) || 0)
+    const marginValue   = Math.max(0, (marginMap[editForm.interest] || 0) - discountValue)
     const balanceDue  = Math.max(0, totalPrice - amountPaid)
-    const wasBooked   = panel.status !== 'booked' && editForm.status === 'booked'
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
  
     // Gate: check-out cannot be before check-in (whenever both are filled in)
@@ -439,14 +525,31 @@ export const Enquiries: React.FC = () => {
       return
     }
 
+    // Auto-promote: a Contacted enquiry with dates and a payment already filled in
+    // moves straight to Booked, no manual status switch needed.
+    let finalStatus = editForm.status
+    if (finalStatus === 'contacted') {
+      const hasDates = !!(editForm.check_in && editForm.check_out)
+      if (amountPaid > 0) {
+        if (hasDates) {
+          finalStatus = 'booked'
+        } else {
+          showToast('Add check-in and check-out dates to mark this as Booked')
+          return
+        }
+      }
+    }
+    const wasBooked = panel.status !== 'booked' && finalStatus === 'booked'
+    const autoPromoted = wasBooked && editForm.status !== 'booked'
+
     // Gate: cannot mark as Booked without check-in and check-out dates
-    if (editForm.status === 'booked' && (!editForm.check_in || !editForm.check_out)) {
+    if (finalStatus === 'booked' && (!editForm.check_in || !editForm.check_out)) {
       showToast('Check-in and check-out dates are required before marking as Booked')
       return
     }
 
     // Gate: cannot mark as Booked without an advance payment above zero
-    if (editForm.status === 'booked' && amountPaid <= 0) {
+    if (finalStatus === 'booked' && amountPaid <= 0) {
       showToast('An advance payment is required before marking as Booked')
       return
     }
@@ -456,7 +559,7 @@ export const Enquiries: React.FC = () => {
       phone:        editForm.phone || null,
       email:        editForm.email || null,
       source:       editForm.source,
-      status:       editForm.status,
+      status:       finalStatus,
       interest:     editForm.interest || null,
       check_in:     editForm.check_in || null,
       check_out:    editForm.check_out || null,
@@ -464,6 +567,7 @@ export const Enquiries: React.FC = () => {
       total_price:  totalPrice,
       amount_paid:  amountPaid,
       margin:       marginValue,
+      discount:     discountValue,
       enquiry_date: editForm.enquiry_date || null,
       updated_by:   user.id,
       updated_at:   new Date().toISOString(),
@@ -477,7 +581,7 @@ export const Enquiries: React.FC = () => {
 
     const FIELD_LABELS: Record<string, string> = {
       name:'name', phone:'phone', email:'email', source:'source', interest:'property/stay',
-      check_in:'check-in', check_out:'check-out', guests:'guests', total_price:'total price', margin:'margin', enquiry_date:'enquiry date',
+      check_in:'check-in', check_out:'check-out', guests:'guests', total_price:'total price', discount:'discount', enquiry_date:'enquiry date',
     }
     const changedFields: string[] = []
     if (editForm.name !== panel.name) changedFields.push('name')
@@ -489,7 +593,7 @@ export const Enquiries: React.FC = () => {
     if ((editForm.check_out || null) !== panel.check_out) changedFields.push('check_out')
     if (Math.max(1, parseInt(editForm.guests) || 1) !== panel.guests) changedFields.push('guests')
     if (totalPrice !== (panel.total_price || 0)) changedFields.push('total_price')
-    if (marginValue !== (panel.margin || 0)) changedFields.push('margin')
+    if (discountValue !== (panel.discount || 0)) changedFields.push('discount')
     if ((editForm.enquiry_date || null) !== panel.enquiry_date) changedFields.push('enquiry_date')
 
     const actor = getActor({
@@ -575,7 +679,7 @@ export const Enquiries: React.FC = () => {
           created_by:   user.id,
           ...(isFullyPaid ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
         })
-        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Saved · Draft income created')
+        showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Saved · Draft income created') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
       } else {
         await supabase.from('hc_finance').update({
           amount:       totalPrice,
@@ -583,7 +687,7 @@ export const Enquiries: React.FC = () => {
           balance_due:  balanceDue,
           ...(isFullyPaid ? { status:'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
         }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
-        showToast(isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Changes saved · Draft income updated')
+        showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Changes saved · Draft income updated') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
       }
     } else {
       showToast('Changes saved')
@@ -718,6 +822,14 @@ export const Enquiries: React.FC = () => {
  
       {/* Content */}
       <div className="page-content">
+
+        {/* Drill-down banner — shown when arrived from a Dashboard click-through */}
+        {drillLabel && (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'9px 14px', marginBottom:'14px' }}>
+            <span style={{ fontSize:'12px', color:'#1e40af' }}>Showing: <strong>{drillLabel}</strong></span>
+            <button onClick={clearDrillDown} style={{ background:'none', border:'none', color:'#1e40af', fontSize:'12px', fontWeight:500, cursor:'pointer', textDecoration:'underline' }}>Clear filter</button>
+          </div>
+        )}
  
         {/* Add form */}
         {showAdd && (
@@ -811,8 +923,7 @@ export const Enquiries: React.FC = () => {
                   <select value={addForm.interest} onChange={e => {
                     const name = e.target.value
                     const price = inventoryMap[name]
-                    const margin = marginMap[name]
-                    setAddForm(f => ({ ...f, interest: name, ...(price ? { total_price: String(price) } : {}), ...(margin ? { margin: String(margin) } : {}) }))
+                    setAddForm(f => ({ ...f, interest: name, ...(price ? { total_price: String(price) } : {}) }))
                   }} style={inp}>
                     <option value="">Select property / package...</option>
                     {interests.map(i => <option key={i} value={i}>{i}</option>)}
@@ -873,7 +984,6 @@ export const Enquiries: React.FC = () => {
                 ['Guests',        'guests',       'number', '1'],
                 ['Total price ₹', 'total_price',  'number', '0'],
                 ['Amount paid ₹', 'amount_paid',  'number', '0'],
-                ['Margin ₹',      'margin',       'number', '0'],
               ] as [string,string,string,string][]).map(([l, k, t, p]) => (
                 <div key={k}>
                   <label style={lbl}>{l}</label>
@@ -882,6 +992,16 @@ export const Enquiries: React.FC = () => {
                     onChange={e => setAddForm(f => ({ ...f, [k]: e.target.value }))} style={inp} />
                 </div>
               ))}
+              <div>
+                <label style={lbl}>Discount ₹</label>
+                <input type="number" min="0" placeholder="0" value={addForm.discount}
+                  onChange={e => {
+                    const newDiscount = parseFloat(e.target.value) || 0
+                    const oldDiscount = parseFloat(addForm.discount) || 0
+                    const delta = newDiscount - oldDiscount
+                    setAddForm(f => ({ ...f, discount: e.target.value, total_price: String(Math.max(0, (parseFloat(f.total_price) || 0) - delta)) }))
+                  }} style={inp} />
+              </div>
             </div>
  
             {/* Status */}
@@ -1111,8 +1231,7 @@ export const Enquiries: React.FC = () => {
                     <select value={editForm.interest} onChange={e => {
                       const name = e.target.value
                       const price = inventoryMap[name]
-                      const margin = marginMap[name]
-                      setEditForm(f => ({ ...f, interest: name, ...(price && !f.total_price ? { total_price: String(price) } : {}), ...(margin && (!f.margin || f.margin === '0') ? { margin: String(margin) } : {}) }))
+                      setEditForm(f => ({ ...f, interest: name, ...(price && !f.total_price ? { total_price: String(price) } : {}) }))
                     }} style={inp}>
                       <option value="">Select property / package...</option>
                       {interests.map(i => <option key={i} value={i}>{i}</option>)}
@@ -1145,8 +1264,14 @@ export const Enquiries: React.FC = () => {
                     <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
                   </div>
                   <div>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Margin ₹</label>
-                    <input type="number" min="0" value={editForm.margin} onChange={e => setEditForm(f => ({ ...f, margin: e.target.value }))} style={inp} />
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Discount ₹</label>
+                    <input type="number" min="0" value={editForm.discount}
+                      onChange={e => {
+                        const newDiscount = parseFloat(e.target.value) || 0
+                        const oldDiscount = parseFloat(editForm.discount) || 0
+                        const delta = newDiscount - oldDiscount
+                        setEditForm(f => ({ ...f, discount: e.target.value, total_price: String(Math.max(0, (parseFloat(f.total_price) || 0) - delta)) }))
+                      }} style={inp} />
                   </div>
                 </div>
                 {(() => {

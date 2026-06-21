@@ -21,6 +21,7 @@ export interface HCProfile {
   gst_number: string | null
   logo_url: string | null
   is_super_admin: boolean
+  margin_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -92,6 +93,7 @@ export interface HCEnquiry {
   total_price: number | null
   amount_paid: number | null
   margin: number | null
+  discount: number | null
   conversation_log: ConversationEntry[]
   notes: string | null
   created_by: string | null; updated_by: string | null

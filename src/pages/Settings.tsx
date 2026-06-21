@@ -72,14 +72,15 @@ export const Settings: React.FC = () => {
  
   // Subscriber (onboarding) state
   const [subscribers, setSubscribers] = useState<HCSubscriber[]>([])
+  const [subProfiles, setSubProfiles] = useState<Record<string, boolean>>({})
   const [showAddSub, setShowAddSub] = useState(false)
-  const [subForm, setSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'' })
+  const [subForm, setSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
   const [showSubPw, setShowSubPw] = useState(false)
   const [savingSub, setSavingSub] = useState(false)
   const [createdSub, setCreatedSub] = useState<{ email: string; password: string } | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [editSubId, setEditSubId] = useState<string | null>(null)
-  const [editSubForm, setEditSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'' })
+  const [editSubForm, setEditSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
   const [showEditSubPw, setShowEditSubPw] = useState(false)
   const [savingEditSub, setSavingEditSub] = useState(false)
  
@@ -109,6 +110,14 @@ export const Settings: React.FC = () => {
       .select('*')
       .order('created_at', { ascending: false })
     setSubscribers((data as HCSubscriber[]) || [])
+
+    const ids = (data || []).map((s: HCSubscriber) => s.auth_user_id).filter(Boolean)
+    if (ids.length > 0) {
+      const { data: profs } = await supabase.from('hc_profiles').select('id, margin_enabled').in('id', ids)
+      const map: Record<string, boolean> = {}
+      ;(profs || []).forEach((p: { id: string; margin_enabled: boolean }) => { map[p.id] = !!p.margin_enabled })
+      setSubProfiles(map)
+    }
   }, [isSuperAdmin])
  
   useEffect(() => {
@@ -243,7 +252,7 @@ export const Settings: React.FC = () => {
       const result = await res.json()
       if (!result.success) throw new Error(result.error)
       setCreatedSub({ email: subForm.email, password: subForm.password })
-      setSubForm({ business_name:'', owner_name:'', phone:'', email:'', password:'' })
+      setSubForm({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
       setShowAddSub(false)
       loadSubscribers()
       showToast(subForm.business_name + ' onboarded successfully')
@@ -277,7 +286,7 @@ export const Settings: React.FC = () => {
  
   const openEditSub = (sub: HCSubscriber) => {
     setEditSubId(sub.id)
-    setEditSubForm({ business_name: sub.business_name || '', owner_name: sub.owner_name || '', phone: sub.phone || '', email: sub.email || '', password: '' })
+    setEditSubForm({ business_name: sub.business_name || '', owner_name: sub.owner_name || '', phone: sub.phone || '', email: sub.email || '', password: '', margin_enabled: !!subProfiles[sub.auth_user_id] })
     setShowEditSubPw(false)
   }
  
@@ -496,7 +505,7 @@ export const Settings: React.FC = () => {
               </select>
             </div>
             <div><label style={lbl}>Base price (₹)</label><input type="number" placeholder="0" value={invForm.base_price} onChange={e => setInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
-            <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" placeholder="0" value={invForm.default_margin} onChange={e => setInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>
+            {profile?.margin_enabled && <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" placeholder="0" value={invForm.default_margin} onChange={e => setInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>}
             <div><label style={lbl}>Capacity (guests)</label><input type="number" placeholder="2" value={invForm.capacity} onChange={e => setInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
             <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input placeholder="Short description (optional)" value={invForm.description} onChange={e => setInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
           </div>
@@ -535,7 +544,7 @@ export const Settings: React.FC = () => {
                       </select>
                     </div>
                     <div><label style={lbl}>Base price (₹)</label><input type="number" value={editInvForm.base_price} onChange={e => setEditInvForm(f => ({ ...f, base_price: e.target.value }))} style={inp} /></div>
-                    <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" value={editInvForm.default_margin} onChange={e => setEditInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>
+                    {profile?.margin_enabled && <div><label style={lbl}>Margin (₹)</label><input type="number" min="0" value={editInvForm.default_margin} onChange={e => setEditInvForm(f => ({ ...f, default_margin: e.target.value }))} style={inp} /></div>}
                     <div><label style={lbl}>Capacity (guests)</label><input type="number" value={editInvForm.capacity} onChange={e => setEditInvForm(f => ({ ...f, capacity: e.target.value }))} style={inp} /></div>
                     <div style={{ gridColumn:'span 2' }}><label style={lbl}>Description</label><input value={editInvForm.description} onChange={e => setEditInvForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
                   </div>
@@ -840,6 +849,15 @@ export const Settings: React.FC = () => {
                   </button>
                 </div>
               </div>
+              <div style={{ gridColumn:'span 2' }}>
+                <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}>
+                  <input type="checkbox" checked={subForm.margin_enabled} onChange={e => setSubForm(f => ({ ...f, margin_enabled: e.target.checked }))} style={{ marginTop:'3px', width:'15px', height:'15px', cursor:'pointer' }} />
+                  <span>
+                    <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>Operates as an agent / OTA</div>
+                    <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>Enables the Margin field on Property/Stay — for businesses that connect guests to third-party stays, not direct property owners.</div>
+                  </span>
+                </label>
+              </div>
             </div>
             <button onClick={createSubscriber} disabled={savingSub}
               style={{ padding:'9px 24px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingSub?0.7:1 }}>
@@ -896,6 +914,15 @@ export const Settings: React.FC = () => {
                             </button>
                           </div>
                         </div>
+                        <div style={{ gridColumn:'span 2' }}>
+                          <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}>
+                            <input type="checkbox" checked={editSubForm.margin_enabled} onChange={e => setEditSubForm(f => ({ ...f, margin_enabled: e.target.checked }))} style={{ marginTop:'3px', width:'15px', height:'15px', cursor:'pointer' }} />
+                            <span>
+                              <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>Operates as an agent / OTA</div>
+                              <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>Enables the Margin field on Property/Stay.</div>
+                            </span>
+                          </label>
+                        </div>
                       </div>
                       <div style={{ display:'flex', gap:'8px' }}>
                         <button onClick={updateSubscriber} disabled={savingEditSub}
@@ -923,6 +950,11 @@ export const Settings: React.FC = () => {
                       <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: isActive ? '#dcfce7' : '#f3f4f6', color: isActive ? '#166534' : '#9ca3af', flexShrink:0 }}>
                         {isActive ? 'Active' : 'Inactive'}
                       </span>
+                      {subProfiles[sub.auth_user_id] && (
+                        <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background:'#e0f2fe', color:'#075985', flexShrink:0 }}>
+                          Agent / OTA
+                        </span>
+                      )}
                       <button onClick={() => openEditSub(sub)}
                         style={{ padding:'7px 14px', background:'#f3f4f6', color:'#374151', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', flexShrink:0 }}>
                         Edit
