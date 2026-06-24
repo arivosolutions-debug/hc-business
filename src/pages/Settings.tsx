@@ -47,7 +47,7 @@ export const Settings: React.FC = () => {
   ]
  
   // Business profile state
-  const [biz, setBiz] = useState({ business_name:'', owner_name:'', phone:'', address:'', gst_number:'' })
+  const [biz, setBiz] = useState({ business_name:'', owner_name:'', phone:'', address:'', gst_number:'', whatsapp_number:'' })
   const [savingBiz, setSavingBiz] = useState(false)
  
   // Employee state
@@ -72,15 +72,15 @@ export const Settings: React.FC = () => {
  
   // Subscriber (onboarding) state
   const [subscribers, setSubscribers] = useState<HCSubscriber[]>([])
-  const [subProfiles, setSubProfiles] = useState<Record<string, boolean>>({})
+  const [subProfiles, setSubProfiles] = useState<Record<string, { margin_enabled: boolean; whatsapp_crm_enabled: boolean; whatsapp_number: string | null }>>({})
   const [showAddSub, setShowAddSub] = useState(false)
-  const [subForm, setSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
+  const [subForm, setSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false, whatsapp_crm_enabled:false, whatsapp_number:'' })
   const [showSubPw, setShowSubPw] = useState(false)
   const [savingSub, setSavingSub] = useState(false)
   const [createdSub, setCreatedSub] = useState<{ email: string; password: string } | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [editSubId, setEditSubId] = useState<string | null>(null)
-  const [editSubForm, setEditSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
+  const [editSubForm, setEditSubForm] = useState({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false, whatsapp_crm_enabled:false, whatsapp_number:'' })
   const [showEditSubPw, setShowEditSubPw] = useState(false)
   const [savingEditSub, setSavingEditSub] = useState(false)
  
@@ -113,9 +113,11 @@ export const Settings: React.FC = () => {
 
     const ids = (data || []).map((s: HCSubscriber) => s.auth_user_id).filter(Boolean)
     if (ids.length > 0) {
-      const { data: profs } = await supabase.from('hc_profiles').select('id, margin_enabled').in('id', ids)
-      const map: Record<string, boolean> = {}
-      ;(profs || []).forEach((p: { id: string; margin_enabled: boolean }) => { map[p.id] = !!p.margin_enabled })
+      const { data: profs } = await supabase.from('hc_profiles').select('id, margin_enabled, whatsapp_crm_enabled, whatsapp_number').in('id', ids)
+      const map: Record<string, { margin_enabled: boolean; whatsapp_crm_enabled: boolean; whatsapp_number: string | null }> = {}
+      ;(profs || []).forEach((p: { id: string; margin_enabled: boolean; whatsapp_crm_enabled: boolean; whatsapp_number: string | null }) => {
+        map[p.id] = { margin_enabled: !!p.margin_enabled, whatsapp_crm_enabled: !!p.whatsapp_crm_enabled, whatsapp_number: p.whatsapp_number }
+      })
       setSubProfiles(map)
     }
   }, [isSuperAdmin])
@@ -127,6 +129,7 @@ export const Settings: React.FC = () => {
       phone:         profile.phone         || '',
       address:       profile.address       || '',
       gst_number:    profile.gst_number    || '',
+      whatsapp_number: profile.whatsapp_number || '',
     })
     load()
   }, [profile, load])
@@ -252,7 +255,7 @@ export const Settings: React.FC = () => {
       const result = await res.json()
       if (!result.success) throw new Error(result.error)
       setCreatedSub({ email: subForm.email, password: subForm.password })
-      setSubForm({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false })
+      setSubForm({ business_name:'', owner_name:'', phone:'', email:'', password:'', margin_enabled:false, whatsapp_crm_enabled:false, whatsapp_number:'' })
       setShowAddSub(false)
       loadSubscribers()
       showToast(subForm.business_name + ' onboarded successfully')
@@ -286,7 +289,14 @@ export const Settings: React.FC = () => {
  
   const openEditSub = (sub: HCSubscriber) => {
     setEditSubId(sub.id)
-    setEditSubForm({ business_name: sub.business_name || '', owner_name: sub.owner_name || '', phone: sub.phone || '', email: sub.email || '', password: '', margin_enabled: !!subProfiles[sub.auth_user_id] })
+    const prof = subProfiles[sub.auth_user_id]
+    setEditSubForm({
+      business_name: sub.business_name || '', owner_name: sub.owner_name || '',
+      phone: sub.phone || '', email: sub.email || '', password: '',
+      margin_enabled: !!prof?.margin_enabled,
+      whatsapp_crm_enabled: !!prof?.whatsapp_crm_enabled,
+      whatsapp_number: prof?.whatsapp_number || '',
+    })
     setShowEditSubPw(false)
   }
  
@@ -461,6 +471,13 @@ export const Settings: React.FC = () => {
             <input value={biz[k]} onChange={e => setBiz(b => ({ ...b, [k]: e.target.value }))} style={inp} />
           </div>
         ))}
+        {profile?.whatsapp_crm_enabled && (
+          <div>
+            <label style={lbl}>WhatsApp Number</label>
+            <input type="tel" placeholder="+91XXXXXXXXXX" value={biz.whatsapp_number} onChange={e => setBiz(b => ({ ...b, whatsapp_number: e.target.value }))} style={inp} />
+            <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'4px' }}>The number guests message for enquiries. Used for WhatsApp CRM auto-capture.</div>
+          </div>
+        )}
         <div style={{ gridColumn:'span 2' }}>
           <label style={lbl}>Address</label>
           <input value={biz.address} onChange={e => setBiz(b => ({ ...b, address: e.target.value }))} style={inp} />
@@ -858,6 +875,21 @@ export const Settings: React.FC = () => {
                   </span>
                 </label>
               </div>
+              <div style={{ gridColumn:'span 2' }}>
+                <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}>
+                  <input type="checkbox" checked={subForm.whatsapp_crm_enabled} onChange={e => setSubForm(f => ({ ...f, whatsapp_crm_enabled: e.target.checked, whatsapp_number: e.target.checked ? f.whatsapp_number : '' }))} style={{ marginTop:'3px', width:'15px', height:'15px', cursor:'pointer' }} />
+                  <span>
+                    <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>Enable WhatsApp CRM</div>
+                    <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>Automatically creates enquiries from inbound WhatsApp messages. Subscriber can set their WhatsApp number in Settings.</div>
+                  </span>
+                </label>
+                {subForm.whatsapp_crm_enabled && (
+                  <div style={{ marginTop:'8px', paddingLeft:'24px' }}>
+                    <label style={lbl}>WhatsApp Number</label>
+                    <input type="tel" placeholder="+91XXXXXXXXXX" value={subForm.whatsapp_number} onChange={e => setSubForm(f => ({ ...f, whatsapp_number: e.target.value }))} style={{ ...inp, marginTop:'4px' }} />
+                  </div>
+                )}
+              </div>
             </div>
             <button onClick={createSubscriber} disabled={savingSub}
               style={{ padding:'9px 24px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:savingSub?0.7:1 }}>
@@ -923,6 +955,21 @@ export const Settings: React.FC = () => {
                             </span>
                           </label>
                         </div>
+                        <div style={{ gridColumn:'span 2' }}>
+                          <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}>
+                            <input type="checkbox" checked={editSubForm.whatsapp_crm_enabled} onChange={e => setEditSubForm(f => ({ ...f, whatsapp_crm_enabled: e.target.checked, whatsapp_number: e.target.checked ? f.whatsapp_number : '' }))} style={{ marginTop:'3px', width:'15px', height:'15px', cursor:'pointer' }} />
+                            <span>
+                              <div style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>Enable WhatsApp CRM</div>
+                              <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'1px' }}>Automatically creates enquiries from inbound WhatsApp messages.</div>
+                            </span>
+                          </label>
+                          {editSubForm.whatsapp_crm_enabled && (
+                            <div style={{ marginTop:'8px', paddingLeft:'24px' }}>
+                              <label style={lbl}>WhatsApp Number</label>
+                              <input type="tel" placeholder="+91XXXXXXXXXX" value={editSubForm.whatsapp_number} onChange={e => setEditSubForm(f => ({ ...f, whatsapp_number: e.target.value }))} style={{ ...inp, marginTop:'4px' }} />
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div style={{ display:'flex', gap:'8px' }}>
                         <button onClick={updateSubscriber} disabled={savingEditSub}
@@ -950,9 +997,14 @@ export const Settings: React.FC = () => {
                       <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background: isActive ? '#dcfce7' : '#f3f4f6', color: isActive ? '#166534' : '#9ca3af', flexShrink:0 }}>
                         {isActive ? 'Active' : 'Inactive'}
                       </span>
-                      {subProfiles[sub.auth_user_id] && (
+                      {subProfiles[sub.auth_user_id]?.margin_enabled && (
                         <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background:'#e0f2fe', color:'#075985', flexShrink:0 }}>
                           Agent / OTA
+                        </span>
+                      )}
+                      {subProfiles[sub.auth_user_id]?.whatsapp_crm_enabled && (
+                        <span style={{ fontSize:'11px', padding:'3px 10px', borderRadius:'20px', fontWeight:500, background:'#dcfce7', color:'#166534', flexShrink:0 }}>
+                          WhatsApp CRM
                         </span>
                       )}
                       <button onClick={() => openEditSub(sub)}

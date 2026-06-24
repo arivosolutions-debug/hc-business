@@ -22,6 +22,9 @@ export interface HCProfile {
   logo_url: string | null
   is_super_admin: boolean
   margin_enabled: boolean
+  whatsapp_crm_enabled: boolean
+  whatsapp_number: string | null
+  whatsapp_phone_number_id: string | null
   created_at: string
   updated_at: string
 }
