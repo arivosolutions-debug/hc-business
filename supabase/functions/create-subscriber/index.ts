@@ -12,7 +12,7 @@ serve(async (req) => {
   }
  
   try {
-    const { email, password, business_name, owner_name, phone } = await req.json()
+    const { email, password, business_name, owner_name, phone, margin_enabled, whatsapp_crm_enabled, whatsapp_number } = await req.json()
  
     if (!email || !password || !business_name) {
       return new Response(JSON.stringify({ success: false, error: 'Email, password and business name are required' }), {
@@ -24,7 +24,30 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
- 
+
+    // ── Authorization: caller must be a super admin ──────────────────────
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: { user: caller }, error: callerErr } = await supabaseAdmin.auth.getUser(token)
+    if (callerErr || !caller) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: callerProfile } = await supabaseAdmin
+      .from('hc_profiles').select('is_super_admin').eq('id', caller.id).single()
+    if (!callerProfile?.is_super_admin) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     // Create auth user
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
@@ -59,6 +82,9 @@ serve(async (req) => {
       owner_name: owner_name || '',
       phone: phone || '',
       is_super_admin: false,
+      margin_enabled: !!margin_enabled,
+      whatsapp_crm_enabled: !!whatsapp_crm_enabled,
+      whatsapp_number: whatsapp_number || null,
     })
  
     // Seed default settings
@@ -82,4 +108,3 @@ serve(async (req) => {
     })
   }
 })
- 

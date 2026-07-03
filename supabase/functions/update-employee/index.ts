@@ -24,7 +24,36 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
- 
+
+    // ── Authorization: caller must own the employee's tenant (or be super admin) ──
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: { user: caller }, error: callerErr } = await supabaseAdmin.auth.getUser(token)
+    if (callerErr || !caller) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    // Look up the employee's tenant and the caller's admin status
+    const { data: targetEmp } = await supabaseAdmin
+      .from('hc_employees').select('tenant_id').eq('id', employee_id).single()
+    const { data: callerProfile } = await supabaseAdmin
+      .from('hc_profiles').select('is_super_admin').eq('id', caller.id).single()
+
+    const ownsTenant = targetEmp && targetEmp.tenant_id === caller.id
+    const isSuperAdmin = !!callerProfile?.is_super_admin
+    if (!ownsTenant && !isSuperAdmin) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     // Update hc_employees table
     const { error: empError } = await supabaseAdmin.from('hc_employees').update({
       name,

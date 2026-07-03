@@ -24,7 +24,30 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
- 
+
+    // ── Authorization: caller must be a super admin ──────────────────────
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: { user: caller }, error: callerErr } = await supabaseAdmin.auth.getUser(token)
+    if (callerErr || !caller) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: callerProfile } = await supabaseAdmin
+      .from('hc_profiles').select('is_super_admin').eq('id', caller.id).single()
+    if (!callerProfile?.is_super_admin) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     if (action === 'ban') {
       await supabaseAdmin.auth.admin.updateUserById(user_id, { ban_duration: '876600h' })
       await supabaseAdmin.from('hc_subscribers').update({ is_active: false }).eq('auth_user_id', user_id)
@@ -45,4 +68,3 @@ serve(async (req) => {
     })
   }
 })
- 

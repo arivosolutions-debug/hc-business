@@ -12,7 +12,7 @@ serve(async (req) => {
   }
  
   try {
-    const { subscriber_id, business_name, owner_name, phone, email, password } = await req.json()
+    const { subscriber_id, business_name, owner_name, phone, email, password, margin_enabled, whatsapp_crm_enabled, whatsapp_number } = await req.json()
  
     if (!subscriber_id) {
       return new Response(JSON.stringify({ success: false, error: 'subscriber_id is required' }), {
@@ -24,7 +24,30 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
     )
- 
+
+    // ── Authorization: caller must be a super admin ──────────────────────
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const token = authHeader.replace('Bearer ', '').trim()
+    if (!token) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: { user: caller }, error: callerErr } = await supabaseAdmin.auth.getUser(token)
+    if (callerErr || !caller) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const { data: callerProfile } = await supabaseAdmin
+      .from('hc_profiles').select('is_super_admin').eq('id', caller.id).single()
+    if (!callerProfile?.is_super_admin) {
+      return new Response(JSON.stringify({ success: false, error: 'Not authorized' }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     // Update hc_subscribers table
     const { error: subError } = await supabaseAdmin.from('hc_subscribers').update({
       business_name,
@@ -45,6 +68,17 @@ serve(async (req) => {
  
       if (Object.keys(authUpdate).length > 0) {
         await supabaseAdmin.auth.admin.updateUserById(sub.auth_user_id, authUpdate)
+      }
+
+      if (margin_enabled !== undefined) {
+        await supabaseAdmin.from('hc_profiles').update({ margin_enabled: !!margin_enabled }).eq('id', sub.auth_user_id)
+      }
+
+      if (whatsapp_crm_enabled !== undefined) {
+        await supabaseAdmin.from('hc_profiles').update({
+          whatsapp_crm_enabled: !!whatsapp_crm_enabled,
+          whatsapp_number: whatsapp_crm_enabled ? (whatsapp_number || null) : null,
+        }).eq('id', sub.auth_user_id)
       }
     }
  
