@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCEnquiry, HCCustomer, fmtDate, STATUS_ORDER, logActivity, getActor } from '../lib/supabase'
+import { draftKey, saveDraft, loadDraft, clearDraft } from '../lib/drafts'
 import * as XLSX from 'xlsx'
  
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December']
@@ -100,6 +101,37 @@ export const Enquiries: React.FC = () => {
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState(BLANK())
   const [saving, setSaving] = useState(false)
+
+  // ── Draft auto-save: Add Enquiry form ──────────────────────────────────
+  // Restores a half-filled enquiry if the browser tab got reloaded mid-entry
+  // (e.g. switching to WhatsApp on Android and the tab losing its memory).
+  const addDraftKeyRef = useRef<string>('')
+  useEffect(() => {
+    if (!tenantId || !user) return
+    addDraftKeyRef.current = draftKey(tenantId, user.id, 'enquiry_add')
+    const draft = loadDraft<ReturnType<typeof BLANK>>(addDraftKeyRef.current)
+    if (draft && (draft.name || draft.phone || draft.total_price || draft.notes)) {
+      setAddForm(draft)
+      setShowAdd(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, user])
+
+  useEffect(() => {
+    if (!showAdd || !addDraftKeyRef.current) return
+    const hasContent = addForm.name || addForm.phone || addForm.total_price || addForm.notes
+    const t = setTimeout(() => {
+      if (hasContent) saveDraft(addDraftKeyRef.current, addForm)
+      else clearDraft(addDraftKeyRef.current)
+    }, 500)
+    return () => clearTimeout(t)
+  }, [addForm, showAdd])
+
+  const cancelAdd = () => {
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
+    setAddForm(BLANK())
+    setShowAdd(false)
+  }
  
   // Dynamic options
   const [sources, setSources] = useState<string[]>(DEFAULT_SOURCES)
@@ -433,14 +465,20 @@ export const Enquiries: React.FC = () => {
       updated_by:   user.id,
     })
 
-    if (!addErr && finalStatus === 'booked' && tenantId) {
+    if (addErr) {
+      setSaving(false)
+      showToast('Could not save — check your connection and try again')
+      return
+    }
+
+    if (finalStatus === 'booked' && tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
       logActivity({
         tenantId, ...actor,
         action: 'enquiry_booked', entityType: 'enquiry', entityId: newId,
         description: `${actor.actorName} created and booked an enquiry for ${addForm.name.trim()} (₹${Math.round(amountPaid).toLocaleString('en-IN')} of ₹${Math.round(totalPrice).toLocaleString('en-IN')} paid)`,
       })
-    } else if (!addErr && tenantId) {
+    } else if (tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
       logActivity({
         tenantId, ...actor,
@@ -448,7 +486,7 @@ export const Enquiries: React.FC = () => {
         description: `${actor.actorName} added a new enquiry for ${addForm.name.trim()}`,
       })
     }
-    if (!addErr && finalStatus === 'booked') {
+    if (finalStatus === 'booked') {
       const finId = crypto.randomUUID()
       const { error: finErr } = await supabase.from('hc_finance').insert({
         id: finId, tenant_id: tenantId, type: 'income',
@@ -462,6 +500,7 @@ export const Enquiries: React.FC = () => {
       if (!finErr) await supabase.from('hc_finance').update({ enquiry_id: newId }).eq('id', finId)
     }
     setSaving(false)
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
     setAddForm(BLANK())
     setShowAdd(false)
     setDupCustomer(null)
@@ -471,9 +510,10 @@ export const Enquiries: React.FC = () => {
   }
  
   // ── Open edit panel ────────────────────────────────────
+  const editDraftKeyRef = useRef<string>('')
   const openPanel = (e: HCEnquiry) => {
     setPanel(e)
-    setEditForm({
+    const fresh = {
       name:         e.name,
       phone:        e.phone || '',
       email:        e.email || '',
@@ -487,7 +527,14 @@ export const Enquiries: React.FC = () => {
       amount_paid:  String(e.amount_paid || 0),
       discount:     String(e.discount || 0),
       enquiry_date: e.enquiry_date || e.created_at?.slice(0, 10) || '',
-    })
+    }
+    if (tenantId && user) {
+      editDraftKeyRef.current = draftKey(tenantId, user.id, 'enquiry_edit', e.id)
+      const draft = loadDraft<typeof fresh>(editDraftKeyRef.current)
+      setEditForm(draft || fresh)
+    } else {
+      setEditForm(fresh)
+    }
     setNewNote('')
   }
 
@@ -501,7 +548,43 @@ export const Enquiries: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingOpenId, enquiries])
- 
+
+  // ── Draft auto-save: Edit panel ────────────────────────────────────────
+  // If the tab reloaded while editing an enquiry, scan for an abandoned edit
+  // draft on mount and silently reopen that record once the list has loaded.
+  const [pendingEditDraftId, setPendingEditDraftId] = useState('')
+  useEffect(() => {
+    if (!tenantId || !user) return
+    const prefix = `hc_draft_${tenantId}_${user.id}_enquiry_edit_`
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(prefix)) {
+        setPendingEditDraftId(k.slice(prefix.length))
+        break
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, user])
+
+  useEffect(() => {
+    if (!pendingEditDraftId || enquiries.length === 0) return
+    const target = enquiries.find(e => e.id === pendingEditDraftId)
+    if (target) openPanel(target)
+    setPendingEditDraftId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEditDraftId, enquiries])
+
+  useEffect(() => {
+    if (!panel || !editDraftKeyRef.current) return
+    const t = setTimeout(() => saveDraft(editDraftKeyRef.current, editForm), 500)
+    return () => clearTimeout(t)
+  }, [editForm, panel])
+
+  const closePanel = () => {
+    if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current)
+    setPanel(null)
+  }
+
   // ── Save edit panel ────────────────────────────────────
   const savePanel = async () => {
     if (!panel || !user) return
@@ -554,7 +637,7 @@ export const Enquiries: React.FC = () => {
       return
     }
  
-    await supabase.from('hc_enquiries').update({
+    const { error: updateErr } = await supabase.from('hc_enquiries').update({
       name:         editForm.name,
       phone:        editForm.phone || null,
       email:        editForm.email || null,
@@ -572,6 +655,11 @@ export const Enquiries: React.FC = () => {
       updated_by:   user.id,
       updated_at:   new Date().toISOString(),
     }).eq('id', panel.id)
+
+    if (updateErr) {
+      showToast('Could not save — check your connection and try again')
+      return
+    }
 
     // ── Activity log: covers every kind of change, with the most meaningful one taking priority ──
     const wasCancelled       = panel.status !== 'cancelled'   && editForm.status === 'cancelled'
@@ -693,6 +781,7 @@ export const Enquiries: React.FC = () => {
       showToast('Changes saved')
     }
  
+    if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current)
     load(); setPanel(null)
   }
  
@@ -733,7 +822,7 @@ export const Enquiries: React.FC = () => {
         description: `${actor.actorName} deleted the enquiry for ${name}`,
       })
     }
-    if (panel?.id === id) setPanel(null)
+    if (panel?.id === id) { if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current); setPanel(null) }
     load()
     showToast(name + ' deleted')
   }
@@ -836,7 +925,7 @@ export const Enquiries: React.FC = () => {
           <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'18px 20px', marginBottom:'14px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
               <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New enquiry</span>
-              <button onClick={() => setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
+              <button onClick={cancelAdd} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
             </div>
  
             {/* Search existing customer — Option B */}
@@ -1029,7 +1118,7 @@ export const Enquiries: React.FC = () => {
                 style={{ padding:'9px 22px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:saving?0.7:1 }}>
                 {saving ? 'Saving…' : 'Save enquiry'}
               </button>
-              <button onClick={() => setShowAdd(false)} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={cancelAdd} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
             </div>
           </div>
         )}
@@ -1153,14 +1242,14 @@ export const Enquiries: React.FC = () => {
       {/* Edit panel */}
       {panel && (
         <>
-          <div onClick={() => setPanel(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
+          <div onClick={closePanel} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
           <div className="side-panel" style={{ width:'340px' }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
               <div>
                 <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>{panel.name}</div>
                 <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'2px' }}>{panel.source} · {fmtDate(panel.enquiry_date || panel.created_at)}</div>
               </div>
-              <button onClick={() => setPanel(null)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
+              <button onClick={closePanel} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
             </div>
  
             <div style={{ flex:1, overflowY:'auto', padding:'16px 18px' }}>
@@ -1327,7 +1416,7 @@ export const Enquiries: React.FC = () => {
  
             <div style={{ padding:'12px 18px', borderTop:'1px solid #e5e7eb', display:'flex', gap:'8px', flexShrink:0 }}>
               <button onClick={savePanel} style={{ flex:1, padding:'9px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Save changes</button>
-              <button onClick={() => setPanel(null)} style={{ padding:'9px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={closePanel} style={{ padding:'9px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
               <button onClick={() => deleteEnquiry(panel.id, panel.name)} style={{ padding:'9px 14px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Delete</button>
             </div>
           </div>

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCFinance, HCProfile, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
+import { draftKey, saveDraft, loadDraft, clearDraft } from '../lib/drafts'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
  
@@ -224,6 +225,37 @@ export const Income: React.FC = () => {
   const [showAdd, setShowAdd]   = useState(false)
   const [addForm, setAddForm]   = useState({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
   const [saving, setSaving]     = useState(false)
+
+  // ── Draft auto-save: Add Income form ───────────────────────────────────
+  // Restores a half-filled income entry if the tab got reloaded mid-entry
+  // (e.g. switching to WhatsApp on Android and the tab losing its memory).
+  const addDraftKeyRef = useRef<string>('')
+  useEffect(() => {
+    if (!tenantId || !user) return
+    addDraftKeyRef.current = draftKey(tenantId, user.id, 'income_add')
+    const draft = loadDraft<typeof addForm>(addDraftKeyRef.current)
+    if (draft && (draft.description || draft.total || draft.notes)) {
+      setAddForm(draft)
+      setShowAdd(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, user])
+
+  useEffect(() => {
+    if (!showAdd || !addDraftKeyRef.current) return
+    const hasContent = addForm.description || addForm.total || addForm.notes
+    const t = setTimeout(() => {
+      if (hasContent) saveDraft(addDraftKeyRef.current, addForm)
+      else clearDraft(addDraftKeyRef.current)
+    }, 500)
+    return () => clearTimeout(t)
+  }, [addForm, showAdd])
+
+  const cancelAdd = () => {
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
+    setAddForm({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
+    setShowAdd(false)
+  }
   const [paymentTypes, setPaymentTypes] = useState<string[]>(DEFAULT_PAYMENT_TYPES)
   const [addingPayType, setAddingPayType] = useState(false)
   const [newPayType, setNewPayType] = useState('')
@@ -400,7 +432,7 @@ export const Income: React.FC = () => {
     const paid  = Math.max(0, parseFloat(addForm.amountPaid) || 0)
     const bal   = Math.max(0, total - paid)
     const full  = total > 0 && paid >= total
-    await supabase.from('hc_finance').insert({
+    const { error: insErr } = await supabase.from('hc_finance').insert({
       tenant_id: tenantId, type:'income', status: full ? 'confirmed' : 'draft',
       amount: total, advance_paid: paid, balance_due: bal,
       description: addForm.description, expected_date: addForm.expectedDate || null,
@@ -408,6 +440,11 @@ export const Income: React.FC = () => {
       date: new Date().toISOString().slice(0, 10), created_by: user.id,
       ...(full ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
     })
+    if (insErr) {
+      setSaving(false)
+      showToast('Could not save — check your connection and try again')
+      return
+    }
     if (tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
       logActivity({
@@ -417,6 +454,7 @@ export const Income: React.FC = () => {
       })
     }
     setSaving(false)
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
     setAddForm({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
     setShowAdd(false)
     load()
@@ -518,7 +556,7 @@ export const Income: React.FC = () => {
           <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'18px 20px', marginBottom:'14px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
               <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New income entry</span>
-              <button onClick={() => setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>x</button>
+              <button onClick={cancelAdd} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>x</button>
             </div>
             <div className="form-grid">
               <div><label style={lbl}>Description *</label><input placeholder="e.g. Walk-in booking" value={addForm.description} onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
@@ -561,7 +599,7 @@ export const Income: React.FC = () => {
             </div>
             <div style={{ display:'flex', gap:'8px' }}>
               <button onClick={handleAdd} disabled={saving} style={{ padding:'9px 22px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:saving?0.7:1 }}>{saving ? 'Saving...' : 'Save income'}</button>
-              <button onClick={() => setShowAdd(false)} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={cancelAdd} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
             </div>
           </div>
         )}

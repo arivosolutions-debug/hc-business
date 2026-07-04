@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase, HCFinance, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
+import { draftKey, saveDraft, loadDraft, clearDraft } from '../lib/drafts'
 import * as XLSX from 'xlsx'
  
 const PAGE_SIZE = 50
@@ -21,6 +22,37 @@ export const Expenses: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [form, setForm]           = useState(BLANK)
   const [saving, setSaving]       = useState(false)
+
+  // ── Draft auto-save: Add Expense form ──────────────────────────────────
+  // Restores a half-filled expense if the tab got reloaded mid-entry
+  // (e.g. switching to WhatsApp on Android and the tab losing its memory).
+  const addDraftKeyRef = useRef<string>('')
+  useEffect(() => {
+    if (!tenantId || !user) return
+    addDraftKeyRef.current = draftKey(tenantId, user.id, 'expense_add')
+    const draft = loadDraft<typeof form>(addDraftKeyRef.current)
+    if (draft && (draft.amount || draft.description)) {
+      setForm(draft)
+      setShowAdd(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, user])
+
+  useEffect(() => {
+    if (!showAdd || !addDraftKeyRef.current) return
+    const hasContent = form.amount || form.description
+    const t = setTimeout(() => {
+      if (hasContent) saveDraft(addDraftKeyRef.current, form)
+      else clearDraft(addDraftKeyRef.current)
+    }, 500)
+    return () => clearTimeout(t)
+  }, [form, showAdd])
+
+  const cancelAdd = () => {
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
+    setForm(BLANK)
+    setShowAdd(false)
+  }
   const [cats, setCats]           = useState<string[]>(DEFAULT_CATS)
   const [toast, setToast]         = useState('')
   const [editRecord, setEditRecord] = useState<HCFinance | null>(null)
@@ -93,11 +125,16 @@ export const Expenses: React.FC = () => {
     if (!user || !form.amount || !form.description.trim()) { showToast('Amount and description are required'); return }
     setSaving(true)
     const amt = Math.max(0, parseFloat(form.amount) || 0)
-    await supabase.from('hc_finance').insert({
+    const { error: insErr } = await supabase.from('hc_finance').insert({
       tenant_id: tenantId, type:'expense', status:'confirmed',
       amount: amt, category: form.category,
       description: form.description, date: form.date, created_by: user.id,
     })
+    if (insErr) {
+      setSaving(false)
+      showToast('Could not save — check your connection and try again')
+      return
+    }
     if (tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
       logActivity({
@@ -106,26 +143,71 @@ export const Expenses: React.FC = () => {
         description: `${actor.actorName} added an expense: ${form.description} (${fmt(amt)}, ${form.category})`,
       })
     }
+    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
     setSaving(false); setForm(BLANK); setShowAdd(false); load()
     showToast('Expense saved')
   }
  
+  const editDraftKeyRef = useRef<string>('')
   const openEdit = (r: HCFinance) => {
     setEditRecord(r)
-    setEditForm({ date: r.date, amount: String(r.amount), category: r.category || 'Staff Salary', description: r.description || '' })
+    const fresh = { date: r.date, amount: String(r.amount), category: r.category || 'Staff Salary', description: r.description || '' }
+    if (tenantId && user) {
+      editDraftKeyRef.current = draftKey(tenantId, user.id, 'expense_edit', r.id)
+      const draft = loadDraft<typeof fresh>(editDraftKeyRef.current)
+      setEditForm(draft || fresh)
+    } else {
+      setEditForm(fresh)
+    }
   }
- 
+
+  // Scan for an abandoned edit draft on mount (tab reloaded mid-edit) and reopen it once records load.
+  const [pendingEditDraftId, setPendingEditDraftId] = useState('')
+  useEffect(() => {
+    if (!tenantId || !user) return
+    const prefix = `hc_draft_${tenantId}_${user.id}_expense_edit_`
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(prefix)) { setPendingEditDraftId(k.slice(prefix.length)); break }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, user])
+
+  useEffect(() => {
+    if (!pendingEditDraftId || records.length === 0) return
+    const target = records.find(r => r.id === pendingEditDraftId)
+    if (target) openEdit(target)
+    setPendingEditDraftId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingEditDraftId, records])
+
+  useEffect(() => {
+    if (!editRecord || !editDraftKeyRef.current) return
+    const t = setTimeout(() => saveDraft(editDraftKeyRef.current, editForm), 500)
+    return () => clearTimeout(t)
+  }, [editForm, editRecord])
+
+  const closeEdit = () => {
+    if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current)
+    setEditRecord(null)
+  }
+
   const saveEdit = async () => {
     if (!editRecord || !user) return
     setSaving(true)
     const newAmt = Math.max(0, parseFloat(editForm.amount) || 0)
-    await supabase.from('hc_finance').update({
+    const { error: updateErr } = await supabase.from('hc_finance').update({
       date:        editForm.date,
       amount:      newAmt,
       category:    editForm.category,
       description: editForm.description,
       updated_at:  new Date().toISOString(),
     }).eq('id', editRecord.id)
+    if (updateErr) {
+      setSaving(false)
+      showToast('Could not save — check your connection and try again')
+      return
+    }
     if (tenantId) {
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: profile?.owner_name })
       logActivity({
@@ -134,6 +216,7 @@ export const Expenses: React.FC = () => {
         description: `${actor.actorName} edited an expense: ${editForm.description} (${fmt(editRecord.amount)} → ${fmt(newAmt)})`,
       })
     }
+    if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current)
     setSaving(false); setEditRecord(null); load()
     showToast('Expense updated')
   }
@@ -150,7 +233,7 @@ export const Expenses: React.FC = () => {
         description: `${actor.actorName} deleted an expense: ${record?.description || 'record'} (${fmt(record?.amount)})`,
       })
     }
-    if (editRecord?.id === id) setEditRecord(null)
+    if (editRecord?.id === id) { if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current); setEditRecord(null) }
     load(); showToast('Expense deleted')
   }
  
@@ -206,7 +289,7 @@ export const Expenses: React.FC = () => {
           <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'18px 20px', marginBottom:'14px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
               <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New expense</span>
-              <button onClick={() => setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
+              <button onClick={cancelAdd} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
             </div>
             <div className="form-grid-4">
               <div><label style={lbl}>Date *</label><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
@@ -247,7 +330,7 @@ export const Expenses: React.FC = () => {
             </div>
             <div style={{ display:'flex', gap:'8px' }}>
               <button onClick={handleAdd} disabled={saving} style={{ padding:'9px 22px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:saving?0.7:1 }}>{saving ? 'Saving…' : 'Save expense'}</button>
-              <button onClick={() => setShowAdd(false)} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={cancelAdd} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
             </div>
           </div>
         )}
@@ -291,11 +374,11 @@ export const Expenses: React.FC = () => {
       {/* Edit panel */}
       {editRecord && (
         <>
-          <div onClick={() => setEditRecord(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
+          <div onClick={closeEdit} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.2)', zIndex:40 }} />
           <div className="side-panel" style={{ width:'320px' }}>
             <div style={{ padding:'14px 18px', borderBottom:'1px solid #e5e7eb', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
               <div style={{ fontSize:'14px', fontWeight:500, color:'#111111' }}>Edit expense</div>
-              <button onClick={() => setEditRecord(null)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
+              <button onClick={closeEdit} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'16px 18px' }}>
               <div style={{ marginBottom:'12px' }}><label style={lbl}>Date</label><input type="date" value={editForm.date} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} style={inp} /></div>
@@ -336,7 +419,7 @@ export const Expenses: React.FC = () => {
             </div>
             <div style={{ padding:'12px 18px', borderTop:'1px solid #e5e7eb', display:'flex', gap:'8px', flexShrink:0 }}>
               <button onClick={saveEdit} disabled={saving} style={{ flex:1, padding:'9px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:saving?0.7:1 }}>{saving ? 'Saving…' : 'Save changes'}</button>
-              <button onClick={() => setEditRecord(null)} style={{ padding:'9px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={closeEdit} style={{ padding:'9px 14px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
               <button onClick={() => deleteRecord(editRecord.id)} style={{ padding:'9px 14px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Delete</button>
             </div>
           </div>
