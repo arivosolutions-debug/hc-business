@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEnquiry, HCCustomer, fmtDate, STATUS_ORDER, logActivity, getActor } from '../lib/supabase'
+import { supabase, HCEnquiry, HCCustomer, fmt, fmtDate, STATUS_ORDER, logActivity, getActor } from '../lib/supabase'
 import { draftKey, saveDraft, loadDraft, clearDraft } from '../lib/drafts'
 import * as XLSX from 'xlsx'
  
@@ -22,6 +22,7 @@ const SELECTABLE_STATUS: Record<string, { label: string; bg: string; color: stri
   Object.fromEntries(Object.entries(STATUS).filter(([k]) => k !== 'completed'))
  
 const DEFAULT_SOURCES = ['WhatsApp DM','Instagram DM','Website form','Phone call','Walk-in','Referral','Other']
+const DEFAULT_PAYMENT_TYPES = ['UPI','Cash','Bank transfer','Cheque']
 const inp: React.CSSProperties = { width:'100%', padding:'8px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#111111', background:'#ffffff', outline:'none', boxSizing:'border-box' }
 const inpRO: React.CSSProperties = { ...inp, background:'#f9fafb', color:'#6b7280', cursor:'not-allowed' }
 const lbl: React.CSSProperties = { display:'block', fontSize:'10px', fontWeight:500, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:'4px' }
@@ -45,6 +46,7 @@ const BLANK = () => ({
   name:'', phone:'', email:'', source:'WhatsApp DM', status:'contacted',
   interest:'', check_in:'', check_out:'', guests:'1',
   total_price:'', amount_paid:'0', discount:'0', notes:'',
+  payment_type:'UPI',
   enquiry_date: new Date().toISOString().slice(0, 10),
 })
  
@@ -127,14 +129,53 @@ export const Enquiries: React.FC = () => {
     return () => clearTimeout(t)
   }, [addForm, showAdd])
 
+  // Dynamic options
+  const [sources, setSources] = useState<string[]>(DEFAULT_SOURCES)
+  const [paymentTypes, setPaymentTypes] = useState<string[]>(DEFAULT_PAYMENT_TYPES)
+  // Split payments — always at least one row. Adding a method just appends
+  // another row; amount_paid is always kept in sync as the sum of these rows,
+  // so entering a payment feels like "keep adding what came in," never like
+  // dividing a pre-set total into parts.
+  const [addPaymentSplits, setAddPaymentSplits] = useState<{ id: string; amount: string; payment_type: string }[]>(
+    [{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }]
+  )
+  const [editPaymentSplits, setEditPaymentSplits] = useState<{ id: string; amount: string; payment_type: string }[]>(
+    [{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }]
+  )
+
   const cancelAdd = () => {
     if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
     setAddForm(BLANK())
+    setAddPaymentSplits([{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }])
     setShowAdd(false)
   }
+
+  // Split-payment helpers — always-on rows, no separate "split mode" to toggle into
+  const updateAddSplit = (i: number, field: 'amount' | 'payment_type', value: string) => {
+    setAddPaymentSplits(prev => {
+      const next = prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp)
+      const total = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+      setAddForm(f => ({ ...f, amount_paid: String(total), payment_type: next[0].payment_type }))
+      return next
+    })
+  }
+  const addMoreAddSplitRow = () => {
+    setAddPaymentSplits(prev => {
+      const used = new Set(prev.map(sp => sp.payment_type))
+      const nextType = paymentTypes.find(pt => !used.has(pt)) || paymentTypes[0] || 'UPI'
+      return [...prev, { id: crypto.randomUUID(), amount: '', payment_type: nextType }]
+    })
+  }
+  const removeAddSplitRow = (i: number) => {
+    setAddPaymentSplits(prev => {
+      if (prev.length <= 1) return prev // always keep at least one row
+      const next = prev.filter((_, idx) => idx !== i)
+      const total = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+      setAddForm(f => ({ ...f, amount_paid: String(total), payment_type: next[0].payment_type }))
+      return next
+    })
+  }
  
-  // Dynamic options
-  const [sources, setSources] = useState<string[]>(DEFAULT_SOURCES)
   const [interests, setInterests] = useState<string[]>([])
   const [inventoryMap, setInventoryMap] = useState<Record<string, number | null>>({})
   const [marginMap, setMarginMap] = useState<Record<string, number | null>>({})
@@ -170,10 +211,11 @@ export const Enquiries: React.FC = () => {
  
   const load = useCallback(async () => {
     if (!user) return
-    const [{ data }, { data: srcData }, { data: invData }] = await Promise.all([
+    const [{ data }, { data: srcData }, { data: invData }, { data: payData }] = await Promise.all([
       supabase.from('hc_enquiries').select('*').eq('tenant_id', tenantId).order('enquiry_date', { ascending: false, nullsFirst: false }),
       supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'source').order('sort_order'),
       supabase.from('hc_inventory').select('name, base_price, default_margin').eq('tenant_id', tenantId).eq('is_active', true).order('sort_order'),
+      supabase.from('hc_settings').select('value').eq('tenant_id', tenantId).eq('type', 'payment_type').order('sort_order'),
     ])
     const enqRecords = (data as HCEnquiry[]) || []
 
@@ -210,6 +252,8 @@ export const Enquiries: React.FC = () => {
       } catch (_) { /* ignore duplicate errors */ }
     }
     setSources(mergedSources)
+
+    setPaymentTypes(payData && payData.length > 0 ? payData.map(p => p.value) : DEFAULT_PAYMENT_TYPES)
  
     // Merge interests from inventory + interests already used in records
     const invInterests = invData ? invData.map(i => i.name) : []
@@ -411,6 +455,18 @@ export const Enquiries: React.FC = () => {
       return
     }
 
+    // Checkpoint: creating a brand-new enquiry as Cancelled while also noting a
+    // payment amount would leave that money with no ledger trail at all — since a
+    // Cancelled enquiry never gets a linked income record. Make this a conscious choice.
+    if (finalStatus === 'cancelled' && Math.max(0, parseFloat(addForm.amount_paid) || 0) > 0) {
+      const keep = window.confirm(
+        `You've entered ₹${Math.round(parseFloat(addForm.amount_paid) || 0).toLocaleString('en-IN')} as paid, but the status is Cancelled.\n\n` +
+        `A Cancelled enquiry has no linked Income record — this amount will be saved on the enquiry itself but won't appear anywhere in Income or the accounts.\n\n` +
+        `Click OK to save it this way anyway, or Cancel to change the status or amount first.`
+      )
+      if (!keep) return
+    }
+
     setSaving(true)
  
     const totalPrice = Math.max(0, parseFloat(addForm.total_price) || 0)
@@ -488,20 +544,31 @@ export const Enquiries: React.FC = () => {
     }
     if (finalStatus === 'booked') {
       const finId = crypto.randomUUID()
+      // Created with starting values — the ledger insert right after this is what
+      // actually determines the true totals via the recompute trigger.
       const { error: finErr } = await supabase.from('hc_finance').insert({
         id: finId, tenant_id: tenantId, type: 'income',
-        status: totalPrice > 0 && amountPaid >= totalPrice ? 'confirmed' : 'draft',
-        amount: totalPrice, advance_paid: amountPaid,
-        balance_due: Math.max(0, totalPrice - amountPaid),
+        status: 'draft', enquiry_id: newId,
+        amount: totalPrice, advance_paid: 0, balance_due: totalPrice,
         date: new Date().toISOString().slice(0,10),
         accounting_date: addForm.check_in || null,
         description: addForm.name.trim() + ' booking', created_by: user.id,
       })
-      if (!finErr) await supabase.from('hc_finance').update({ enquiry_id: newId }).eq('id', finId)
+      if (!finErr && amountPaid > 0 && tenantId) {
+        const kind = amountPaid >= totalPrice ? 'full' : 'advance'
+        const today = new Date().toISOString().slice(0, 10)
+        const rows = addPaymentSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0).map(sp => ({
+          tenant_id: tenantId, finance_id: finId, enquiry_id: newId,
+          amount: parseFloat(sp.amount) || 0, kind, payment_type: sp.payment_type,
+          payment_date: today, recorded_by: user.id,
+        }))
+        await supabase.from('hc_payments').insert(rows)
+      }
     }
     setSaving(false)
     if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
     setAddForm(BLANK())
+    setAddPaymentSplits([{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }])
     setShowAdd(false)
     setDupCustomer(null)
     setPendingSave(null)
@@ -526,6 +593,7 @@ export const Enquiries: React.FC = () => {
       total_price:  String(e.total_price || 0),
       amount_paid:  String(e.amount_paid || 0),
       discount:     String(e.discount || 0),
+      payment_type: 'UPI',
       enquiry_date: e.enquiry_date || e.created_at?.slice(0, 10) || '',
     }
     if (tenantId && user) {
@@ -535,6 +603,7 @@ export const Enquiries: React.FC = () => {
     } else {
       setEditForm(fresh)
     }
+    setEditPaymentSplits([{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }])
     setNewNote('')
   }
 
@@ -582,7 +651,36 @@ export const Enquiries: React.FC = () => {
 
   const closePanel = () => {
     if (editDraftKeyRef.current) clearDraft(editDraftKeyRef.current)
+    setEditPaymentSplits([{ id: crypto.randomUUID(), amount: '', payment_type: 'UPI' }])
     setPanel(null)
+  }
+
+  // Additional-payment rows — always at least one. Editing them adds on top of
+  // whatever was already paid before this edit; editForm.amount_paid is kept in
+  // sync as (already paid + these rows), so it always reflects the real new total.
+  const updateEditSplit = (i: number, field: 'amount' | 'payment_type', value: string) => {
+    setEditPaymentSplits(prev => {
+      const next = prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp)
+      const addedNow = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+      setEditForm(f => ({ ...f, amount_paid: String((panel?.amount_paid || 0) + addedNow), payment_type: next[0].payment_type }))
+      return next
+    })
+  }
+  const addMoreEditSplitRow = () => {
+    setEditPaymentSplits(prev => {
+      const used = new Set(prev.map(sp => sp.payment_type))
+      const nextType = paymentTypes.find(pt => !used.has(pt)) || paymentTypes[0] || 'UPI'
+      return [...prev, { id: crypto.randomUUID(), amount: '', payment_type: nextType }]
+    })
+  }
+  const removeEditSplitRow = (i: number) => {
+    setEditPaymentSplits(prev => {
+      if (prev.length <= 1) return prev // always keep at least one row
+      const next = prev.filter((_, idx) => idx !== i)
+      const addedNow = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+      setEditForm(f => ({ ...f, amount_paid: String((panel?.amount_paid || 0) + addedNow), payment_type: next[0].payment_type }))
+      return next
+    })
   }
 
   // ── Save edit panel ────────────────────────────────────
@@ -599,7 +697,6 @@ export const Enquiries: React.FC = () => {
     const amountPaid  = Math.max(0, parseFloat(editForm.amount_paid) || 0)
     const discountValue = Math.max(0, parseFloat(editForm.discount) || 0)
     const marginValue   = Math.max(0, (marginMap[editForm.interest] || 0) - discountValue)
-    const balanceDue  = Math.max(0, totalPrice - amountPaid)
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
  
     // Gate: check-out cannot be before check-in (whenever both are filled in)
@@ -636,7 +733,23 @@ export const Enquiries: React.FC = () => {
       showToast('An advance payment is required before marking as Booked')
       return
     }
- 
+
+    // Checkpoint: cancelling a booking that has money recorded against it needs a
+    // conscious choice, not a silent one — Cancelled shouldn't leave a stale, out-of-
+    // sync Income record behind with no indication anything changed. If they actually
+    // want to refund the guest, that belongs in Income (which cancels the enquiry for
+    // them automatically); this is only for the deliberate "keep the deposit" case.
+    if (finalStatus === 'cancelled' && panel.status !== 'cancelled' && (panel.amount_paid || 0) > 0) {
+      const keep = window.confirm(
+        `This booking has ₹${Math.round(panel.amount_paid || 0).toLocaleString('en-IN')} recorded as paid.\n\n` +
+        `Cancelling here will NOT refund the guest — that amount stays on record as a kept deposit.\n\n` +
+        `To refund the guest instead, go to Income and use the Refund button there — it will cancel this booking automatically.\n\n` +
+        `Click OK to cancel and keep the deposit as-is, or Cancel to go back.`
+      )
+      if (!keep) return
+    }
+
+
     const { error: updateErr } = await supabase.from('hc_enquiries').update({
       name:         editForm.name,
       phone:        editForm.phone || null,
@@ -742,40 +855,57 @@ export const Enquiries: React.FC = () => {
       }
     }
  
-    // Handle income draft
-    const { data: existingDrafts } = await supabase
+    // Sync the linked income record — fires whenever a genuine payment increase
+    // happens through this panel, not just the first time an enquiry becomes Booked.
+    // Payment recording always goes through the ledger; this never writes
+    // advance_paid/balance_due/status directly — the recompute trigger does that.
+    const { data: existingFinance } = await supabase
       .from('hc_finance')
-      .select('id')
+      .select('id, advance_paid')
       .eq('tenant_id', panel.tenant_id)
       .eq('enquiry_id', panel.id)
       .eq('type', 'income')
-      .eq('status', 'draft')
- 
-    if (wasBooked) {
-      if (!existingDrafts || existingDrafts.length === 0) {
+      .maybeSingle()
+
+    const paidIncrease = amountPaid - prevPaid
+
+    if (finalStatus === 'booked') {
+      let financeId = existingFinance?.id as string | undefined
+
+      if (!financeId) {
+        const newFinId = crypto.randomUUID()
         await supabase.from('hc_finance').insert({
+          id: newFinId,
           tenant_id:   panel.tenant_id,
           type:        'income',
-          status:      isFullyPaid ? 'confirmed' : 'draft',
+          status:      'draft',
           enquiry_id:  panel.id,
           amount:      totalPrice,
-          advance_paid: amountPaid,
-          balance_due:  balanceDue,
+          advance_paid: 0,
+          balance_due:  totalPrice,
           date:         editForm.check_in || new Date().toISOString().slice(0, 10),
           accounting_date: editForm.check_in || null,
           description:  `${panel.name} booking`,
           created_by:   user.id,
-          ...(isFullyPaid ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
         })
-        showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Saved · Draft income created') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
+        financeId = newFinId
+      } else if (totalPrice !== (panel.total_price || 0)) {
+        // Total price changed but this isn't a payment event — just keep the sale amount in sync
+        await supabase.from('hc_finance').update({ amount: totalPrice }).eq('id', financeId)
+      }
+
+      if (paidIncrease > 0 && financeId) {
+        const kind: 'advance' | 'additional' | 'full' = isFullyPaid ? 'full' : (prevPaid <= 0 ? 'advance' : 'additional')
+        const today = new Date().toISOString().slice(0, 10)
+        const rows = editPaymentSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0).map(sp => ({
+          tenant_id: panel.tenant_id, finance_id: financeId, enquiry_id: panel.id,
+          amount: parseFloat(sp.amount) || 0, kind, payment_type: sp.payment_type,
+          payment_date: today, recorded_by: user.id,
+        }))
+        await supabase.from('hc_payments').insert(rows)
+        showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : existingFinance ? 'Changes saved · Draft income updated' : 'Saved · Draft income created') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
       } else {
-        await supabase.from('hc_finance').update({
-          amount:       totalPrice,
-          advance_paid: amountPaid,
-          balance_due:  balanceDue,
-          ...(isFullyPaid ? { status:'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
-        }).eq('tenant_id', panel.tenant_id).eq('enquiry_id', panel.id).eq('status', 'draft')
-        showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : 'Changes saved · Draft income updated') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
+        showToast('Changes saved' + (autoPromoted ? ' · Automatically marked as Booked' : ''))
       }
     } else {
       showToast('Changes saved')
@@ -1072,7 +1202,6 @@ export const Enquiries: React.FC = () => {
                 ['Check-out',     'check_out',    'date',   ''],
                 ['Guests',        'guests',       'number', '1'],
                 ['Total price ₹', 'total_price',  'number', '0'],
-                ['Amount paid ₹', 'amount_paid',  'number', '0'],
               ] as [string,string,string,string][]).map(([l, k, t, p]) => (
                 <div key={k}>
                   <label style={lbl}>{l}</label>
@@ -1090,6 +1219,29 @@ export const Enquiries: React.FC = () => {
                     const delta = newDiscount - oldDiscount
                     setAddForm(f => ({ ...f, discount: e.target.value, total_price: String(Math.max(0, (parseFloat(f.total_price) || 0) - delta)) }))
                   }} style={inp} />
+              </div>
+              <div style={{ gridColumn: addPaymentSplits.length > 1 ? 'span 2' : undefined }}>
+                <label style={lbl}>Amount paid ₹</label>
+                {addPaymentSplits.map((sp, i) => (
+                  <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
+                    <input type="number" min="0" placeholder="0" value={sp.amount} onChange={e => updateAddSplit(i, 'amount', e.target.value)}
+                      style={{ ...inp, flex:1 }} />
+                    <select value={sp.payment_type} onChange={e => updateAddSplit(i, 'payment_type', e.target.value)} style={{ ...inp, flex:1 }}>
+                      {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                    </select>
+                    {addPaymentSplits.length > 1 && (
+                      <button onClick={() => removeAddSplitRow(i)} style={{ background:'none', border:'none', color:'#9ca3af', cursor:'pointer', fontSize:'18px', lineHeight:1, padding:'0 4px' }}>×</button>
+                    )}
+                  </div>
+                ))}
+                <button onClick={addMoreAddSplitRow} style={{ background:'none', border:'none', color:'#1e40af', cursor:'pointer', fontSize:'11px', fontWeight:500, padding:0, textDecoration:'underline' }}>
+                  + Add another payment method
+                </button>
+                {addPaymentSplits.length > 1 && (
+                  <div style={{ fontSize:'11px', color:'#6b7280', marginTop:'6px' }}>
+                    Total paid: <strong style={{ color:'#111111' }}>{fmt(parseFloat(addForm.amount_paid) || 0)}</strong>
+                  </div>
+                )}
               </div>
             </div>
  
@@ -1349,8 +1501,8 @@ export const Enquiries: React.FC = () => {
                     <input type="number" min="0" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
                   </div>
                   <div>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Amount paid ₹</label>
-                    <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Already paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(before this edit)</span></label>
+                    <input type="number" value={panel?.amount_paid || 0} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
                   </div>
                   <div>
                     <label style={{ ...lbl, color:'#9ca3af' }}>Discount ₹</label>
@@ -1361,6 +1513,28 @@ export const Enquiries: React.FC = () => {
                         const delta = newDiscount - oldDiscount
                         setEditForm(f => ({ ...f, discount: e.target.value, total_price: String(Math.max(0, (parseFloat(f.total_price) || 0) - delta)) }))
                       }} style={inp} />
+                  </div>
+                  <div style={{ gridColumn:'span 2' }}>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Additional payment now ₹</label>
+                    {editPaymentSplits.map((sp, i) => (
+                      <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
+                        <input type="number" min="0" placeholder="0" value={sp.amount} onChange={e => updateEditSplit(i, 'amount', e.target.value)}
+                          style={{ ...inp, flex:1 }} />
+                        <select value={sp.payment_type} onChange={e => updateEditSplit(i, 'payment_type', e.target.value)} style={{ ...inp, flex:1 }}>
+                          {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                        </select>
+                        {editPaymentSplits.length > 1 && (
+                          <button onClick={() => removeEditSplitRow(i)} style={{ background:'none', border:'none', color:'#9ca3af', cursor:'pointer', fontSize:'18px', lineHeight:1, padding:'0 4px' }}>×</button>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={addMoreEditSplitRow} style={{ background:'none', border:'none', color:'#1e40af', cursor:'pointer', fontSize:'11px', fontWeight:500, padding:0, textDecoration:'underline' }}>
+                      + Add another payment method
+                    </button>
+                    <div style={{ marginTop:'8px' }}>
+                      <label style={{ ...lbl, color:'#9ca3af' }}>New total paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(auto-calculated)</span></label>
+                      <input type="number" value={editForm.amount_paid} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
+                    </div>
                   </div>
                 </div>
                 {(() => {

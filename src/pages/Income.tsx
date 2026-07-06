@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCFinance, HCProfile, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
-import { draftKey, saveDraft, loadDraft, clearDraft } from '../lib/drafts'
+import { supabase, HCFinance, HCProfile, HCPayment, fmt, fmtDate, logActivity, getActor } from '../lib/supabase'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
  
@@ -14,10 +13,23 @@ const inp: React.CSSProperties = { width:'100%', padding:'8px 10px', border:'1px
 const inpRO: React.CSSProperties = { ...inp, background:'#f9fafb', color:'#6b7280', cursor:'not-allowed' }
 const lbl: React.CSSProperties = { display:'block', fontSize:'10px', fontWeight:500, color:'#6b7280', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:'4px' }
  
+type RecordStatusKey = 'draft' | 'paid_full' | 'refunded'
+
+function getRecordStatusKey(r: HCFinance): RecordStatusKey {
+  if (r.status === 'refunded') return 'refunded'
+  if (r.status === 'draft')    return 'draft'
+  return 'paid_full'
+}
+
+const STATUS_KEY_LABEL: Record<RecordStatusKey, string> = {
+  draft: 'Draft', paid_full: 'Paid in full', refunded: 'Refunded',
+}
+
 function getStatusBadge(r: HCFinance): { label: string; bg: string; color: string } {
-  if (r.status === 'draft')    return { label:'Draft',       bg:'#fef9c3', color:'#854f0b' }
-  if ((r.balance_due || 0) === 0) return { label:'Paid in full', bg:'#dcfce7', color:'#166534' }
-  return { label:'Part paid', bg:'#fef9c3', color:'#854f0b' }
+  const key = getRecordStatusKey(r)
+  if (key === 'refunded')  return { label:'Refunded',    bg:'#fee2e2', color:'#991b1b' }
+  if (key === 'draft')     return { label:'Draft',       bg:'#fef9c3', color:'#854f0b' }
+  return { label:'Paid in full', bg:'#dcfce7', color:'#166534' }
 }
  
 // ── Receipt Modal ──────────────────────────────────────────────
@@ -25,6 +37,15 @@ interface ReceiptProps { record: HCFinance; profile: HCProfile | null; onClose: 
  
 const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null)
+  const [payments, setPayments] = useState<HCPayment[]>([])
+
+  useEffect(() => {
+    supabase.from('hc_payments').select('*').eq('finance_id', record.id).order('payment_date')
+      .then(({ data }) => setPayments((data as HCPayment[]) || []))
+  }, [record.id])
+
+  const kindLabel = (k: HCPayment['kind']) =>
+    k === 'advance' ? 'Advance' : k === 'full' ? 'Full payment' : k === 'refund' ? 'Refund' : 'Additional payment'
  
   const handlePrint = () => {
     const el = printRef.current
@@ -44,23 +65,6 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     w.print()
   }
  
-  const handleWhatsApp = () => {
-    const rawPhone = record.enquiry?.phone || ''
-    const phone = rawPhone.replace(/\D/g, '')
-    const bizName = profile?.business_name || 'HC Business'
-    const guestName = record.enquiry?.name || record.description || ''
-    const msg = encodeURIComponent(
-      `*Receipt — ${bizName}*\n\n`
-      + `Guest: ${guestName}\n`
-      + `Total: ${fmt(record.amount)}\n`
-      + `Paid: ${fmt(record.advance_paid)}\n`
-      + `Balance: ${fmt(record.balance_due)}\n\n`
-      + `Thank you for choosing ${bizName}!`
-    )
-    window.open(`https://wa.me/${phone}?text=${msg}`, '_blank')
-  }
- 
- 
   const handleDownloadPDF = () => {
     const doc = new jsPDF({ unit: 'mm', format: 'a5' })
     const biz = profile?.business_name || 'HC Business'
@@ -68,8 +72,8 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     const phone = profile?.phone || ''
     const name = record.enquiry?.name || record.description || '—'
     const total = record.amount || 0
-    const paid = record.advance_paid || 0
     const balance = record.balance_due || 0
+    const refunded = record.refunded_amount || 0
     const date = fmtDate(record.date)
  
     doc.setFontSize(16); doc.setFont('helvetica','bold')
@@ -84,14 +88,13 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     doc.setDrawColor(200); doc.line(10, 44, 138, 44)
     doc.setTextColor(0); doc.setFontSize(10)
     const rows = [
+      ['Receipt no.', record.receipt_number || '—'],
       ['Guest name', name],
       ['Property / Stay', record.enquiry?.interest || '—'],
       ['Check-in', record.enquiry?.check_in ? new Date(record.enquiry.check_in + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
       ['Check-out', record.enquiry?.check_out ? new Date(record.enquiry.check_out + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }) : '—'],
-      ['Payment type', record.payment_type || '—'],
       ['Accounting period', record.accounting_date ? new Date(record.accounting_date + 'T12:00:00').toLocaleDateString('en-IN', { month:'long', year:'numeric' }) : '—'],
       ['Total booking amount', 'Rs. ' + Math.round(total).toLocaleString('en-IN')],
-      ['Amount paid', 'Rs. ' + Math.round(paid).toLocaleString('en-IN')],
     ]
     let y = 52
     rows.forEach(([label, val]) => {
@@ -100,10 +103,32 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
       doc.setFont('helvetica','normal')
       y += 8
     })
+
+    // Itemized payment history — every installment gets its own line, not just a single cumulative total
+    if (payments.length > 0) {
+      doc.setDrawColor(200); doc.line(10, y, 138, y); y += 6
+      doc.setFontSize(8); doc.setTextColor(100); doc.setFont('helvetica','bold')
+      doc.text('PAYMENT HISTORY', 12, y); y += 6
+      doc.setFontSize(9)
+      payments.forEach(p => {
+        doc.setFont('helvetica','normal'); doc.setTextColor(100)
+        const label = `${fmtDate(p.payment_date)} - ${kindLabel(p.kind)}${p.payment_type ? ' (' + p.payment_type + ')' : ''}`
+        doc.text(label, 12, y)
+        doc.setFont('helvetica','bold'); doc.setTextColor(p.kind === 'refund' ? 153 : 22)
+        doc.text((p.kind === 'refund' ? '- ' : '') + 'Rs. ' + Math.round(p.amount).toLocaleString('en-IN'), 136, y, { align:'right' })
+        y += 6
+      })
+    }
+
     doc.setDrawColor(23,52,30); doc.line(10, y, 138, y); y += 6
     doc.setFontSize(11); doc.setFont('helvetica','bold')
-    doc.text('Balance due', 12, y)
-    doc.setTextColor(balance > 0 ? 153 : 22); doc.text(balance > 0 ? 'Rs. ' + Math.round(balance).toLocaleString('en-IN') : 'Fully paid', 136, y, { align:'right' })
+    if (record.status === 'refunded') {
+      doc.setTextColor(153); doc.text('Refunded', 12, y)
+      doc.text('Rs. ' + Math.round(refunded).toLocaleString('en-IN'), 136, y, { align:'right' })
+    } else {
+      doc.text('Balance due', 12, y)
+      doc.setTextColor(balance > 0 ? 153 : 22); doc.text(balance > 0 ? 'Rs. ' + Math.round(balance).toLocaleString('en-IN') : 'Fully paid', 136, y, { align:'right' })
+    }
     doc.setTextColor(150); doc.setFontSize(9); doc.setFont('helvetica','normal')
     doc.text('Thank you for choosing ' + biz + '!', 74, y + 10, { align:'center' })
     doc.save('receipt-' + name.replace(/\s+/g,'-').toLowerCase() + '.pdf')
@@ -119,6 +144,7 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
     : '—'
 
   const rows: Array<[string, string]> = [
+    ['Receipt no.',   record.receipt_number || '—'],
     ['Guest name',    record.enquiry?.name || record.description || '—'],
     ['Phone',         record.enquiry?.phone || '—'],
     ['Property / stay', record.enquiry?.interest || '—'],
@@ -151,36 +177,54 @@ const ReceiptModal: React.FC<ReceiptProps> = ({ record, profile, onClose }) => {
               <span style={{ fontWeight:500 }}>{value}</span>
             </div>
           ))}
- 
+
           <div style={{ display:'flex', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6', fontSize:'13px' }}>
             <span style={{ color:'#6b7280' }}>Total booking amount</span>
             <span style={{ fontWeight:500 }}>{fmt(record.amount)}</span>
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', padding:'7px 0', borderBottom:'1px solid #f3f4f6', fontSize:'13px' }}>
-            <span style={{ color:'#6b7280' }}>Amount paid</span>
-            <span style={{ fontWeight:500, color:'#166534' }}>{fmt(record.advance_paid)}</span>
-          </div>
-          <div style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', fontSize:'15px', fontWeight:600, borderTop:'2px solid #17341e', marginTop:'4px' }}>
-            <span>Balance due</span>
-            <span style={{ color: (record.balance_due || 0) > 0 ? '#991b1b' : '#166534' }}>
-              {(record.balance_due || 0) > 0 ? fmt(record.balance_due) : 'Fully paid'}
-            </span>
-          </div>
- 
+
+          {payments.length > 0 && (
+            <div style={{ margin:'10px 0', padding:'10px 12px', background:'#f9fafb', borderRadius:'8px' }}>
+              <div style={{ fontSize:'10px', fontWeight:600, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'6px' }}>Payment history</div>
+              {payments.map(p => (
+                <div key={p.id} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', fontSize:'12px' }}>
+                  <span style={{ color:'#6b7280' }}>
+                    {fmtDate(p.payment_date)} — {kindLabel(p.kind)}{p.payment_type ? ` (${p.payment_type})` : ''}
+                    {p.receipt_number && <span style={{ color:'#d1d5db' }}> · {p.receipt_number}</span>}
+                  </span>
+                  <span style={{ fontWeight:500, color: p.kind === 'refund' ? '#991b1b' : '#166534' }}>
+                    {p.kind === 'refund' ? '- ' : ''}{fmt(p.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {record.status === 'refunded' ? (
+            <div style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', fontSize:'15px', fontWeight:600, borderTop:'2px solid #17341e', marginTop:'4px' }}>
+              <span>Refunded</span>
+              <span style={{ color:'#991b1b' }}>{fmt(record.refunded_amount)}</span>
+            </div>
+          ) : (
+            <div style={{ display:'flex', justifyContent:'space-between', padding:'10px 0', fontSize:'15px', fontWeight:600, borderTop:'2px solid #17341e', marginTop:'4px' }}>
+              <span>Balance due</span>
+              <span style={{ color: (record.balance_due || 0) > 0 ? '#991b1b' : '#166534' }}>
+                {(record.balance_due || 0) > 0 ? fmt(record.balance_due) : 'Fully paid'}
+              </span>
+            </div>
+          )}
+
           <div style={{ textAlign:'center', marginTop:'20px', fontSize:'11px', color:'#9ca3af' }}>
             Thank you for choosing {profile?.business_name || 'us'}!
           </div>
         </div>
- 
+
         <div style={{ display:'flex', gap:'8px', marginTop:'20px', flexWrap:'wrap' }}>
           <button onClick={handlePrint} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
             Print
           </button>
           <button onClick={handleDownloadPDF} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#1e40af', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
             Download PDF
-          </button>
-          <button onClick={handleWhatsApp} style={{ flex:1, minWidth:'80px', padding:'10px', background:'#25d366', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
-            WhatsApp
           </button>
           <button onClick={onClose} style={{ padding:'10px 16px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
             Close
@@ -201,6 +245,7 @@ export const Income: React.FC = () => {
   const [filterMonth, setFilterMonth]     = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterInterest, setFilterInterest] = useState('')
+  const [filterStatus, setFilterStatus]   = useState<'' | RecordStatusKey>('')
   // Drill-down filters — only ever set by navigating in from the Dashboard
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -222,52 +267,19 @@ export const Income: React.FC = () => {
     setDateFrom(''); setDateTo(''); setDrillLabel('')
   }
   const [currentPage, setCurrentPage]     = useState(1)
-  const [showAdd, setShowAdd]   = useState(false)
-  const [addForm, setAddForm]   = useState({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
   const [saving, setSaving]     = useState(false)
-
-  // ── Draft auto-save: Add Income form ───────────────────────────────────
-  // Restores a half-filled income entry if the tab got reloaded mid-entry
-  // (e.g. switching to WhatsApp on Android and the tab losing its memory).
-  const addDraftKeyRef = useRef<string>('')
-  useEffect(() => {
-    if (!tenantId || !user) return
-    addDraftKeyRef.current = draftKey(tenantId, user.id, 'income_add')
-    const draft = loadDraft<typeof addForm>(addDraftKeyRef.current)
-    if (draft && (draft.description || draft.total || draft.notes)) {
-      setAddForm(draft)
-      setShowAdd(true)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId, user])
-
-  useEffect(() => {
-    if (!showAdd || !addDraftKeyRef.current) return
-    const hasContent = addForm.description || addForm.total || addForm.notes
-    const t = setTimeout(() => {
-      if (hasContent) saveDraft(addDraftKeyRef.current, addForm)
-      else clearDraft(addDraftKeyRef.current)
-    }, 500)
-    return () => clearTimeout(t)
-  }, [addForm, showAdd])
-
-  const cancelAdd = () => {
-    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
-    setAddForm({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
-    setShowAdd(false)
-  }
   const [paymentTypes, setPaymentTypes] = useState<string[]>(DEFAULT_PAYMENT_TYPES)
-  const [addingPayType, setAddingPayType] = useState(false)
-  const [newPayType, setNewPayType] = useState('')
   const [addingEditPayType, setAddingEditPayType] = useState(false)
   const [newEditPayType, setNewEditPayType] = useState('')
   const [managingPayTypes, setManagingPayTypes] = useState(false)
   const [editRecord, setEditRecord]   = useState<HCFinance | null>(null)
-  const [amountNow, setAmountNow]     = useState('')
-  const [editPayType, setEditPayType] = useState('UPI')
+  const [paymentSplits, setPaymentSplits] = useState<{ id: string; amount: string; payment_type: string }[]>([])
   const [editExpDate, setEditExpDate] = useState('')
   const [editNotes, setEditNotes]     = useState('')
   const [receiptRec, setReceiptRec]   = useState<HCFinance | null>(null)
+  const [refundRec, setRefundRec]     = useState<HCFinance | null>(null)
+  const [refundSplits, setRefundSplits] = useState<{ id: string; amount: string; payment_type: string }[]>([])
+  const [refundNotes, setRefundNotes] = useState('')
   const [toast, setToast] = useState('')
  
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3000) }
@@ -309,13 +321,13 @@ export const Income: React.FC = () => {
     setLoading(false)
   }, [user, tenantId])
  
-  const addPayTypeOption = async (val: string, isEdit = false) => {
+  const addPayTypeOption = async (val: string) => {
     if (!val.trim() || !tenantId) return
     await supabase.from('hc_settings').insert({ tenant_id: tenantId, type: 'payment_type', value: val.trim(), sort_order: paymentTypes.length })
     const updated = [...paymentTypes, val.trim()]
     setPaymentTypes(updated)
-    if (isEdit) { setNewEditPayType(''); setAddingEditPayType(false) }
-    else { setNewPayType(''); setAddingPayType(false) }
+    setNewEditPayType('')
+    setAddingEditPayType(false)
   }
  
   const deletePayTypeOption = async (val: string) => {
@@ -331,6 +343,7 @@ export const Income: React.FC = () => {
     if (filterMonth !== '' && new Date(r.date).getMonth() !== parseInt(filterMonth)) return false
     if (filterPayment && r.payment_type !== filterPayment) return false
     if (filterInterest && r.enquiry?.interest !== filterInterest) return false
+    if (filterStatus && getRecordStatusKey(r) !== filterStatus) return false
     if (dateFrom && r.date < dateFrom) return false
     if (dateTo && r.date > dateTo) return false
     return true
@@ -347,6 +360,7 @@ export const Income: React.FC = () => {
       return b.date.localeCompare(a.date)  // neither has a check-in date — fall back to payment date
     }),
     ...filtered.filter(r => r.status === 'confirmed').sort((a, b) => b.date.localeCompare(a.date)),
+    ...filtered.filter(r => r.status === 'refunded').sort((a, b) => b.date.localeCompare(a.date)),
   ]
  
   const totalPages  = Math.ceil(sorted.length / PAGE_SIZE)
@@ -358,32 +372,30 @@ export const Income: React.FC = () => {
   const totalPrice   = Number(editRecord?.enquiry?.total_price ?? editRecord?.amount ?? 0)
   const alreadyPaid  = Number(editRecord?.enquiry?.amount_paid ?? editRecord?.advance_paid ?? 0)
   const trueBalance  = Math.max(0, totalPrice - alreadyPaid)
-  const amountNowNum = parseFloat(amountNow) || 0
+  const amountNowNum = paymentSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
   const newPaid      = alreadyPaid + amountNowNum
   const newBalance   = Math.max(0, totalPrice - newPaid)
   const isFullyPaid  = totalPrice > 0 && newPaid >= totalPrice
-  const exceedsMax   = amountNow !== '' && amountNowNum > trueBalance
- 
-  const deleteIncome = async (r: HCFinance) => {
-    const label = r.enquiry?.name || r.description || 'this record'
-    if (!window.confirm(`Delete income record for "${label}"? This cannot be undone.`)) return
-    await supabase.from('hc_finance').delete().eq('id', r.id)
-    if (user && tenantId) {
-      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
-      logActivity({
-        tenantId, ...actor,
-        action: 'income_deleted', entityType: 'income', entityId: r.id,
-        description: `${actor.actorName} deleted the income record for ${label} (${fmt(r.advance_paid)} paid)`,
-      })
-    }
-    load()
-    showToast('Income record deleted')
+  const exceedsMax   = paymentSplits.some(sp => sp.amount !== '') && amountNowNum > trueBalance
+
+  const updateSplit = (i: number, field: 'amount' | 'payment_type', value: string) => {
+    setPaymentSplits(prev => prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp))
   }
+  const addSplitRow = () => {
+    setPaymentSplits(prev => {
+      const used = new Set(prev.map(sp => sp.payment_type))
+      const nextType = paymentTypes.find(pt => !used.has(pt)) || paymentTypes[0] || 'UPI'
+      return [...prev, { id: crypto.randomUUID(), amount: '', payment_type: nextType }]
+    })
+  }
+  const removeSplitRow = (i: number) => {
+    setPaymentSplits(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev)
+  }
+ 
  
   const openEdit = (r: HCFinance) => {
     setEditRecord(r)
-    setAmountNow('')
-    setEditPayType(r.payment_type || 'UPI')
+    setPaymentSplits([{ id: crypto.randomUUID(), amount: '', payment_type: (r.payment_type || 'UPI').split(', ')[0] }])
     setEditExpDate(r.expected_date || '')
     setEditNotes(r.notes || '')
   }
@@ -391,74 +403,134 @@ export const Income: React.FC = () => {
   const saveEdit = async () => {
     if (!editRecord || !user || exceedsMax) return
     setSaving(true)
-    await supabase.from('hc_finance').update({
-      advance_paid:  newPaid,
-      balance_due:   newBalance,
-      amount:        totalPrice,
-      expected_date: editExpDate || null,
-      payment_type:  editPayType,
-      notes:         editNotes,
-      ...(isFullyPaid ? { status:'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
-      updated_at: new Date().toISOString(),
-    }).eq('id', editRecord.id)
- 
-    if (editRecord.enquiry_id) {
-      await supabase.from('hc_enquiries').update({
-        amount_paid: newPaid,
-        updated_at:  new Date().toISOString(),
-      }).eq('id', editRecord.enquiry_id)
-    }
 
-    if (amountNowNum > 0 && tenantId) {
+    // Non-payment fields (expected date, notes) still update directly — these
+    // aren't part of the ledger, just metadata on the sale itself. payment_type
+    // is no longer set here at all — the trigger derives it from the ledger.
+    await supabase.from('hc_finance').update({
+      expected_date: editExpDate || null,
+      notes:         editNotes,
+      updated_at:    new Date().toISOString(),
+    }).eq('id', editRecord.id)
+
+    const activeSplits = paymentSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0)
+
+    if (activeSplits.length > 0 && tenantId) {
+      // A genuine payment happened — record each component as its own ledger entry.
+      // Kind is the same for every component of one payment moment: first-ever
+      // payment on this sale = advance (or full, if it settles everything in one
+      // go); any later payment = additional (or full, if it's the one that finally
+      // clears the balance).
+      const isFirstPayment = alreadyPaid <= 0
+      const kind: 'advance' | 'additional' | 'full' =
+        isFullyPaid ? 'full' : (isFirstPayment ? 'advance' : 'additional')
+      const today = new Date().toISOString().slice(0, 10)
+
+      const { error: payErr } = await supabase.from('hc_payments').insert(
+        activeSplits.map(sp => ({
+          tenant_id:   tenantId,
+          finance_id:  editRecord.id,
+          enquiry_id:  editRecord.enquiry_id,
+          amount:      parseFloat(sp.amount) || 0,
+          kind,
+          payment_type: sp.payment_type,
+          payment_date: today,
+          recorded_by: user.id,
+        }))
+      )
+
+      if (payErr) {
+        setSaving(false)
+        showToast('Could not record payment — check your connection and try again')
+        return
+      }
+
       const label = editRecord.enquiry?.name || editRecord.description || 'this record'
       const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
+      const methodNote = activeSplits.length > 1 ? ` split across ${activeSplits.map(sp => sp.payment_type).join(' + ')}` : ''
       logActivity({
         tenantId, ...actor,
         action: 'income_recorded', entityType: 'income', entityId: editRecord.id,
-        description: `${actor.actorName} recorded ${fmt(amountNowNum)} payment for ${label}${isFullyPaid ? ' — fully paid' : ` (balance ${fmt(newBalance)})`}`,
+        description: `${actor.actorName} recorded ${fmt(amountNowNum)} payment${methodNote} for ${label}${isFullyPaid ? ' — fully paid' : ` (balance ${fmt(newBalance)})`}`,
       })
     }
- 
+
     setSaving(false)
     setEditRecord(null)
     load()
     showToast(isFullyPaid ? 'Fully paid — income confirmed' : `Saved · Balance: ${fmt(newBalance)}`)
   }
- 
-  const handleAdd = async () => {
-    if (!user || !addForm.total) { showToast('Total amount is required'); return }
-    setSaving(true)
-    const total = Math.max(0, parseFloat(addForm.total) || 0)
-    const paid  = Math.max(0, parseFloat(addForm.amountPaid) || 0)
-    const bal   = Math.max(0, total - paid)
-    const full  = total > 0 && paid >= total
-    const { error: insErr } = await supabase.from('hc_finance').insert({
-      tenant_id: tenantId, type:'income', status: full ? 'confirmed' : 'draft',
-      amount: total, advance_paid: paid, balance_due: bal,
-      description: addForm.description, expected_date: addForm.expectedDate || null,
-      payment_type: addForm.paymentType, notes: addForm.notes,
-      date: new Date().toISOString().slice(0, 10), created_by: user.id,
-      ...(full ? { confirmed_at: new Date().toISOString(), confirmed_by: user.id } : {}),
+
+  // ── Refund ───────────────────────────────────────────────────
+  // A refund is its own ledger entry, never an edit to history. The moment it's
+  // recorded, the database automatically marks this record 'refunded' and
+  // cancels the linked enquiry — that cascade is guaranteed at the DB level,
+  // not something this code has to remember to do.
+  const openRefund = (r: HCFinance) => {
+    setRefundRec(r)
+    setRefundSplits([{ id: crypto.randomUUID(), amount: '', payment_type: (r.payment_type || 'UPI').split(', ')[0] }])
+    setRefundNotes('')
+  }
+
+  const netPaidFor = (r: HCFinance) => Math.max(0, (r.advance_paid || 0))
+  const refundAmountNum = refundSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+  const refundExceedsMax = refundRec ? refundAmountNum > netPaidFor(refundRec) : false
+
+  const updateRefundSplit = (i: number, field: 'amount' | 'payment_type', value: string) => {
+    setRefundSplits(prev => prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp))
+  }
+  const addRefundSplitRow = () => {
+    setRefundSplits(prev => {
+      const used = new Set(prev.map(sp => sp.payment_type))
+      const nextType = paymentTypes.find(pt => !used.has(pt)) || paymentTypes[0] || 'UPI'
+      return [...prev, { id: crypto.randomUUID(), amount: '', payment_type: nextType }]
     })
-    if (insErr) {
+  }
+  const removeRefundSplitRow = (i: number) => {
+    setRefundSplits(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev)
+  }
+
+  const saveRefund = async () => {
+    if (!refundRec || !user || !tenantId) return
+    if (refundAmountNum <= 0 || refundExceedsMax) return
+    setSaving(true)
+
+    const activeSplits = refundSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0)
+    const today = new Date().toISOString().slice(0, 10)
+
+    const { error: refundErr } = await supabase.from('hc_payments').insert(
+      activeSplits.map(sp => ({
+        tenant_id:    tenantId,
+        finance_id:   refundRec.id,
+        enquiry_id:   refundRec.enquiry_id,
+        amount:       parseFloat(sp.amount) || 0,
+        kind:         'refund',
+        payment_type: sp.payment_type,
+        payment_date: today,
+        notes:        refundNotes || null,
+        recorded_by:  user.id,
+      }))
+    )
+
+    if (refundErr) {
       setSaving(false)
-      showToast('Could not save — check your connection and try again')
+      showToast('Could not process refund — check your connection and try again')
       return
     }
-    if (tenantId) {
-      const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
-      logActivity({
-        tenantId, ...actor,
-        action: 'income_created', entityType: 'income',
-        description: `${actor.actorName} added a manual income entry: ${addForm.description || 'income'} (${fmt(total)}, ${fmt(paid)} paid)`,
-      })
-    }
+
+    const label = refundRec.enquiry?.name || refundRec.description || 'this record'
+    const actor = getActor({ userId: user.id, isOwner, employeeName: employee?.name, ownerName: authProfile?.owner_name })
+    const methodNote = activeSplits.length > 1 ? ` split across ${activeSplits.map(sp => sp.payment_type).join(' + ')}` : ''
+    logActivity({
+      tenantId, ...actor,
+      action: 'income_refunded', entityType: 'income', entityId: refundRec.id,
+      description: `${actor.actorName} refunded ${fmt(refundAmountNum)}${methodNote} to ${label} — booking marked as Cancelled`,
+    })
+
     setSaving(false)
-    if (addDraftKeyRef.current) clearDraft(addDraftKeyRef.current)
-    setAddForm({ description:'', total:'', amountPaid:'', expectedDate:'', paymentType:'UPI', notes:'' })
-    setShowAdd(false)
+    setRefundRec(null)
     load()
-    showToast('Income saved')
+    showToast('Refund processed — booking marked as Cancelled')
   }
  
   const exportExcel = () => {
@@ -472,7 +544,7 @@ export const Income: React.FC = () => {
       'Amount paid':    r.advance_paid || 0,
       'Balance':        r.balance_due || 0,
       'Payment type':   r.payment_type || '',
-      Status:           r.status === 'draft' ? 'Draft' : (r.balance_due || 0) === 0 ? 'Paid in full' : 'Part paid',
+      Status:           r.status === 'refunded' ? `Refunded (${fmt(r.refunded_amount)})` : r.status === 'draft' ? 'Draft' : 'Paid in full',
     }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Income')
@@ -518,9 +590,6 @@ export const Income: React.FC = () => {
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'6px', flexShrink:0 }}>
             {isOwner && <button onClick={exportExcel} style={{ padding:'6px 10px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>↓ Excel</button>}
-            <button onClick={() => setShowAdd(v => !v)} style={{ padding:'6px 12px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>
-              + Add income
-            </button>
           </div>
         </div>
         {/* Row 2: Filters - horizontally scrollable */}
@@ -537,6 +606,10 @@ export const Income: React.FC = () => {
             <option value="">All payments</option>
             {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
           </select>
+          <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value as '' | RecordStatusKey); setCurrentPage(1) }} style={{ ...sel, flexShrink:0, width:'115px' }}>
+            <option value="">All statuses</option>
+            {(Object.keys(STATUS_KEY_LABEL) as RecordStatusKey[]).map(k => <option key={k} value={k}>{STATUS_KEY_LABEL[k]}</option>)}
+          </select>
         </div>
       </div>
  
@@ -548,59 +621,6 @@ export const Income: React.FC = () => {
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:'8px', padding:'9px 14px', marginBottom:'14px' }}>
             <span style={{ fontSize:'12px', color:'#1e40af' }}>Showing: <strong>{drillLabel}</strong></span>
             <button onClick={clearDrillDown} style={{ background:'none', border:'none', color:'#1e40af', fontSize:'12px', fontWeight:500, cursor:'pointer', textDecoration:'underline' }}>Clear filter</button>
-          </div>
-        )}
- 
-        {/* Manual add form */}
-        {showAdd && (
-          <div style={{ background:'#f9fafb', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'18px 20px', marginBottom:'14px' }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
-              <span style={{ fontSize:'13px', fontWeight:500, color:'#111111' }}>New income entry</span>
-              <button onClick={cancelAdd} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>x</button>
-            </div>
-            <div className="form-grid">
-              <div><label style={lbl}>Description *</label><input placeholder="e.g. Walk-in booking" value={addForm.description} onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Total price Rs *</label><input type="number" min="0" placeholder="0" value={addForm.total} onChange={e => setAddForm(f => ({ ...f, total: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Amount paid Rs</label><input type="number" min="0" placeholder="0" value={addForm.amountPaid} onChange={e => setAddForm(f => ({ ...f, amountPaid: e.target.value }))} style={inp} /></div>
-              <div><label style={lbl}>Expected date</label><input type="date" value={addForm.expectedDate} onChange={e => setAddForm(f => ({ ...f, expectedDate: e.target.value }))} style={inp} /></div>
-              <div>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <label style={lbl}>Payment type</label>
-                  <span onClick={() => setManagingPayTypes(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingPayTypes ? 'Done' : 'Manage'}</span>
-                </div>
-                {managingPayTypes ? (
-                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
-                    {paymentTypes.map(pt => (
-                      <div key={pt} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
-                        <span style={{ fontSize:'12px', color:'#374151' }}>{pt}</span>
-                        <button onClick={() => deletePayTypeOption(pt)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
-                      </div>
-                    ))}
-                    {paymentTypes.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
-                  </div>
-                ) : (
-                  <select value={addForm.paymentType} onChange={e => setAddForm(f => ({ ...f, paymentType: e.target.value }))} style={inp}>
-                    {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
-                    <option value="__add__">+ Add new...</option>
-                  </select>
-                )}
-                {addForm.paymentType === '__add__' && !managingPayTypes && (
-                  <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
-                    <input value={newPayType} onChange={e => setNewPayType(e.target.value)} placeholder="New payment type" style={{ ...inp, flex:1 }}
-                      onKeyDown={e => { if (e.key === 'Enter') { addPayTypeOption(newPayType); setAddForm(f => ({ ...f, paymentType: newPayType.trim() })) } }} autoFocus />
-                    <button onClick={() => { addPayTypeOption(newPayType); setAddForm(f => ({ ...f, paymentType: newPayType.trim() })) }}
-                      style={{ padding:'6px 12px', background:'#17341e', color:'#fff', border:'none', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>Add</button>
-                    <button onClick={() => { setNewPayType(''); setAddForm(f => ({ ...f, paymentType: paymentTypes[0] })) }}
-                      style={{ padding:'6px 10px', background:'#fff', color:'#6b7280', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>x</button>
-                  </div>
-                )}
-              </div>
-              <div><label style={lbl}>Notes</label><input placeholder="Optional" value={addForm.notes} onChange={e => setAddForm(f => ({ ...f, notes: e.target.value }))} style={inp} /></div>
-            </div>
-            <div style={{ display:'flex', gap:'8px' }}>
-              <button onClick={handleAdd} disabled={saving} style={{ padding:'9px 22px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity:saving?0.7:1 }}>{saving ? 'Saving...' : 'Save income'}</button>
-              <button onClick={cancelAdd} style={{ padding:'9px 18px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
-            </div>
           </div>
         )}
  
@@ -635,8 +655,8 @@ export const Income: React.FC = () => {
                         <td style={{ padding:'12px 16px', fontSize:'12px', color:'#6b7280', whiteSpace:'nowrap', background: isDraft ? '#fefce8' : undefined }}>{r.enquiry?.interest || '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight:500, color:'#111111', whiteSpace:'nowrap' }}>{(r.amount || 0) > 0 ? fmt(r.amount) : '—'}</td>
                         <td style={{ padding:'12px 16px', fontSize:'13px', color:'#166534', whiteSpace:'nowrap' }}>{(r.advance_paid || 0) > 0 ? fmt(r.advance_paid) : '—'}</td>
-                        <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight: balance > 0 ? 500 : 400, color: balance > 0 ? '#991b1b' : '#9ca3af', whiteSpace:'nowrap' }}>
-                          {balance > 0 ? fmt(balance) : r.status === 'confirmed' ? 'Paid' : '—'}
+                        <td style={{ padding:'12px 16px', fontSize:'13px', fontWeight: balance > 0 ? 500 : 400, color: r.status === 'refunded' ? '#991b1b' : balance > 0 ? '#991b1b' : '#9ca3af', whiteSpace:'nowrap' }}>
+                          {r.status === 'refunded' ? `Refunded ${fmt(r.refunded_amount)}` : balance > 0 ? fmt(balance) : r.status === 'confirmed' ? 'Paid' : '—'}
                         </td>
                         <td style={{ padding:'12px 16px', fontSize:'12px', color:'#6b7280', whiteSpace:'nowrap' }}>{r.payment_type || '—'}</td>
                         <td style={{ padding:'12px 16px' }}>
@@ -648,7 +668,9 @@ export const Income: React.FC = () => {
                               Edit
                             </button>
                             <button onClick={() => setReceiptRec(r)} style={{ padding:'6px 12px', background:'#fef9c3', color:'#854f0b', border:'1px solid #fde047', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Receipt</button>
-                            <button onClick={() => deleteIncome(r)} style={{ padding:'6px 12px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Delete</button>
+                            {(r.advance_paid || 0) > 0 && (
+                              <button onClick={() => openRefund(r)} style={{ padding:'6px 12px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>Refund</button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -712,66 +734,63 @@ export const Income: React.FC = () => {
                 </div>
  
                 <div style={{ marginBottom:'10px' }}>
-                  <label style={lbl}>Amount received now Rs</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={amountNow}
-                    onChange={e => setAmountNow(e.target.value)}
-                    placeholder={`Max: Rs ${trueBalance.toLocaleString('en-IN')}`}
-                    style={{ ...inp, borderColor: exceedsMax ? '#fca5a5' : '#e5e7eb' }}
-                    autoFocus
-                  />
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <label style={lbl}>Amount received now Rs</label>
+                    <span onClick={() => setManagingPayTypes(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingPayTypes ? 'Done' : 'Manage payment types'}</span>
+                  </div>
+
+                  {managingPayTypes ? (
+                    <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'160px', overflowY:'auto' }}>
+                      {paymentTypes.map(pt => (
+                        <div key={pt} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
+                          <span style={{ fontSize:'12px', color:'#374151' }}>{pt}</span>
+                          <button onClick={() => deletePayTypeOption(pt)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
+                        </div>
+                      ))}
+                      {paymentTypes.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
+                      <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
+                        <input value={newEditPayType} onChange={e => setNewEditPayType(e.target.value)} placeholder="New payment type" style={{ ...inp, flex:1 }}
+                          onKeyDown={e => { if (e.key === 'Enter') addPayTypeOption(newEditPayType) }} />
+                        <button onClick={() => addPayTypeOption(newEditPayType)} style={{ padding:'6px 12px', background:'#17341e', color:'#fff', border:'none', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>Add</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {paymentSplits.map((sp, i) => (
+                        <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
+                          <input type="number" min="0" placeholder={i === 0 ? `Max: Rs ${trueBalance.toLocaleString('en-IN')}` : '0'}
+                            value={sp.amount} onChange={e => updateSplit(i, 'amount', e.target.value)}
+                            style={{ ...inp, flex:1, borderColor: exceedsMax ? '#fca5a5' : '#e5e7eb' }} autoFocus={i === 0} />
+                          <select value={sp.payment_type} onChange={e => updateSplit(i, 'payment_type', e.target.value)} style={{ ...inp, flex:1 }}>
+                            {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
+                          </select>
+                          {paymentSplits.length > 1 && (
+                            <button onClick={() => removeSplitRow(i)} style={{ background:'none', border:'none', color:'#9ca3af', cursor:'pointer', fontSize:'18px', lineHeight:1, padding:'0 4px' }}>×</button>
+                          )}
+                        </div>
+                      ))}
+                      <button onClick={addSplitRow} style={{ background:'none', border:'none', color:'#1e40af', cursor:'pointer', fontSize:'11px', fontWeight:500, padding:0, textDecoration:'underline' }}>
+                        + Split across another payment method
+                      </button>
+                    </>
+                  )}
                   {exceedsMax && (
-                    <div style={{ fontSize:'11px', color:'#991b1b', marginTop:'4px' }}>
+                    <div style={{ fontSize:'11px', color:'#991b1b', marginTop:'6px' }}>
                       {`Exceeds remaining balance of ${fmt(trueBalance)}`}
                     </div>
                   )}
                 </div>
- 
+
                 <div style={{ marginBottom:'10px' }}>
                   <label style={lbl}>New balance Rs <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(auto-calculated)</span></label>
-                  <input type="number" value={amountNow !== '' ? newBalance : trueBalance} readOnly style={inpRO} />
+                  <input type="number" value={amountNowNum > 0 ? newBalance : trueBalance} readOnly style={inpRO} />
                 </div>
- 
-                {amountNow !== '' && totalPrice > 0 && (
+
+                {amountNowNum > 0 && totalPrice > 0 && (
                   <div style={{ padding:'8px 12px', borderRadius:'6px', background: isFullyPaid ? '#dcfce7' : '#fef9c3', border:`1px solid ${isFullyPaid ? '#86efac' : '#fde047'}` }}>
                     <span style={{ fontSize:'12px', fontWeight:500, color: isFullyPaid ? '#166534' : '#854f0b' }}>
                       {isFullyPaid ? 'Fully paid — will confirm on save' : `${fmt(newBalance)} still pending`}
                     </span>
-                  </div>
-                )}
-              </div>
- 
-              <div style={{ marginBottom:'12px' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <label style={lbl}>Payment type</label>
-                  <span onClick={() => setManagingPayTypes(v => !v)} style={{ fontSize:'10px', color:'#6b7280', cursor:'pointer', textDecoration:'underline', marginBottom:'4px' }}>{managingPayTypes ? 'Done' : 'Manage'}</span>
-                </div>
-                {managingPayTypes ? (
-                  <div style={{ border:'1px solid #e5e7eb', borderRadius:'8px', padding:'6px', maxHeight:'130px', overflowY:'auto' }}>
-                    {paymentTypes.map(pt => (
-                      <div key={pt} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 6px', borderRadius:'4px' }}>
-                        <span style={{ fontSize:'12px', color:'#374151' }}>{pt}</span>
-                        <button onClick={() => deletePayTypeOption(pt)} style={{ background:'none', border:'none', color:'#ef4444', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0 2px' }}>×</button>
-                      </div>
-                    ))}
-                    {paymentTypes.length === 0 && <div style={{ fontSize:'11px', color:'#9ca3af', padding:'4px 6px' }}>No items yet</div>}
-                  </div>
-                ) : (
-                  <select value={editPayType} onChange={e => setEditPayType(e.target.value)} style={inp}>
-                    {paymentTypes.map(pt => <option key={pt}>{pt}</option>)}
-                    <option value="__add__">+ Add new...</option>
-                  </select>
-                )}
-                {editPayType === '__add__' && !managingPayTypes && (
-                  <div style={{ display:'flex', gap:'6px', marginTop:'6px' }}>
-                    <input value={newEditPayType} onChange={e => setNewEditPayType(e.target.value)} placeholder="New payment type" style={{ ...inp, flex:1 }}
-                      onKeyDown={e => { if (e.key === 'Enter') { addPayTypeOption(newEditPayType, true); setEditPayType(newEditPayType.trim()) } }} autoFocus />
-                    <button onClick={() => { addPayTypeOption(newEditPayType, true); setEditPayType(newEditPayType.trim()) }}
-                      style={{ padding:'6px 12px', background:'#17341e', color:'#fff', border:'none', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>Add</button>
-                    <button onClick={() => { setNewEditPayType(''); setEditPayType(paymentTypes[0]) }}
-                      style={{ padding:'6px 10px', background:'#fff', color:'#6b7280', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', cursor:'pointer' }}>x</button>
                   </div>
                 )}
               </div>
@@ -803,6 +822,58 @@ export const Income: React.FC = () => {
  
       {/* Receipt modal */}
       {receiptRec && <ReceiptModal record={receiptRec} profile={profile} onClose={() => setReceiptRec(null)} />}
+
+      {/* Refund modal */}
+      {refundRec && (
+        <>
+          <div onClick={() => setRefundRec(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:60 }} />
+          <div className="modal" style={{ padding:'24px', width:'380px' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
+              <span style={{ fontSize:'14px', fontWeight:600, color:'#111111' }}>Process refund</span>
+              <button onClick={() => setRefundRec(null)} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#9ca3af', lineHeight:1, padding:0 }}>×</button>
+            </div>
+            <div style={{ background:'#fef2f2', border:'1px solid #fecaca', borderRadius:'8px', padding:'10px 12px', marginBottom:'16px', fontSize:'11px', color:'#991b1b' }}>
+              Refunding any amount will mark this booking as <strong>Cancelled</strong>.
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:'12px', color:'#6b7280', marginBottom:'14px' }}>
+              <span>Currently received</span>
+              <span style={{ fontWeight:500, color:'#111111' }}>{fmt(netPaidFor(refundRec))}</span>
+            </div>
+            <div style={{ marginBottom:'16px' }}>
+              <label style={lbl}>Refund amount</label>
+              {refundSplits.map((sp, i) => (
+                <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
+                  <input type="number" min="0" placeholder="0" value={sp.amount} onChange={e => updateRefundSplit(i, 'amount', e.target.value)}
+                    style={{ ...inp, flex:1, borderColor: refundExceedsMax ? '#fca5a5' : '#e5e7eb' }} />
+                  <select value={sp.payment_type} onChange={e => updateRefundSplit(i, 'payment_type', e.target.value)} style={{ ...inp, flex:1 }}>
+                    {paymentTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                  </select>
+                  {refundSplits.length > 1 && (
+                    <button onClick={() => removeRefundSplitRow(i)} style={{ background:'none', border:'none', color:'#9ca3af', cursor:'pointer', fontSize:'18px', lineHeight:1, padding:'0 4px' }}>×</button>
+                  )}
+                </div>
+              ))}
+              <button onClick={addRefundSplitRow} style={{ background:'none', border:'none', color:'#1e40af', cursor:'pointer', fontSize:'11px', fontWeight:500, padding:0, textDecoration:'underline' }}>
+                + Split across another payment method
+              </button>
+              {refundExceedsMax && (
+                <div style={{ fontSize:'11px', color:'#991b1b', marginTop:'6px' }}>Cannot exceed the amount actually received ({fmt(netPaidFor(refundRec))})</div>
+              )}
+            </div>
+            <div style={{ marginBottom:'16px' }}>
+              <label style={lbl}>Reason (optional)</label>
+              <textarea value={refundNotes} onChange={e => setRefundNotes(e.target.value)} rows={2} style={{ ...inp, resize:'none' }} placeholder="e.g. guest cancelled the booking" />
+            </div>
+            <div style={{ display:'flex', gap:'8px' }}>
+              <button onClick={() => setRefundRec(null)} style={{ flex:1, padding:'9px', background:'#ffffff', color:'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>Cancel</button>
+              <button onClick={saveRefund} disabled={saving || refundAmountNum <= 0 || refundExceedsMax}
+                style={{ flex:1, padding:'9px', background: (saving || refundAmountNum <= 0 || refundExceedsMax) ? '#f3f4f6' : '#991b1b', color: (saving || refundAmountNum <= 0 || refundExceedsMax) ? '#9ca3af' : '#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor: (saving || refundAmountNum <= 0 || refundExceedsMax) ? 'not-allowed' : 'pointer' }}>
+                {saving ? 'Processing...' : 'Confirm refund'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
  
       {toast && (
         <div style={{ position:'fixed', bottom:'24px', left:'50%', transform:'translateX(-50%)', background:'#17341e', color:'#ffffff', fontSize:'12px', fontWeight:500, padding:'8px 20px', borderRadius:'20px', zIndex:80, whiteSpace:'nowrap' }}>

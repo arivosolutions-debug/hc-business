@@ -111,9 +111,10 @@ export interface ConversationEntry {
 // ── Finance ───────────────────────────────────────────────
 export interface HCFinance {
   id: string; tenant_id: string; type: 'income' | 'expense'
-  status: 'draft' | 'confirmed'
+  status: 'draft' | 'confirmed' | 'refunded'
   enquiry_id: string | null
   advance_paid: number; balance_due: number; expected_date: string | null
+  refunded_amount: number
   amount: number; description: string | null; category: string | null
   payment_type: string | null; date: string; accounting_date: string | null; receipt_number: string | null
   confirmed_at: string | null; confirmed_by: string | null
@@ -126,6 +127,22 @@ export interface HCFinance {
     check_in: string | null; check_out: string | null
     guests: number | null
   }
+}
+
+// ── Payment ledger — one immutable row per payment event ────
+// Never edited after creation. Corrections happen via new entries
+// (e.g. a refund), never by mutating history.
+export interface HCPayment {
+  id: string; tenant_id: string
+  finance_id: string | null; enquiry_id: string | null
+  receipt_number: string | null
+  amount: number
+  kind: 'advance' | 'additional' | 'full' | 'refund'
+  payment_type: string | null
+  payment_date: string
+  notes: string | null
+  recorded_by: string
+  created_at: string
 }
  
 // ── Status sort order ─────────────────────────────────────
