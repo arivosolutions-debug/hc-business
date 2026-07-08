@@ -12,6 +12,7 @@ const Income        = React.lazy(() => import('./pages/Income'))
 const Expenses      = React.lazy(() => import('./pages/Expenses'))
 const Calendar      = React.lazy(() => import('./pages/Calendar'))
 const SettingsPage  = React.lazy(() => import('./pages/Settings'))
+const SharedCRMReport = React.lazy(() => import('./pages/Sharedcrmreport.tsx'))
  
 const Loader = () => (
   <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f9fafb' }}>
@@ -48,13 +49,14 @@ const AuthRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 const AppRoutes = () => (
   <Routes>
     <Route path="/login"      element={<AuthRoute><Login /></AuthRoute>} />
+    <Route path="/shared/:token" element={<Page><SharedCRMReport /></Page>} />
     <Route path="/dashboard"  element={<ProtectedRoute permKey="dashboard"><Page><Dashboard /></Page></ProtectedRoute>} />
     <Route path="/enquiries"  element={<ProtectedRoute permKey="enquiries"><Page><Enquiries /></Page></ProtectedRoute>} />
     <Route path="/customers"  element={<ProtectedRoute permKey="customers"><Page><CustomersPage /></Page></ProtectedRoute>} />
     <Route path="/income"     element={<ProtectedRoute permKey="income"><Page><Income /></Page></ProtectedRoute>} />
     <Route path="/expenses"   element={<ProtectedRoute permKey="expenses"><Page><Expenses /></Page></ProtectedRoute>} />
     <Route path="/calendar"   element={<ProtectedRoute permKey="calendar"><Page><Calendar /></Page></ProtectedRoute>} />
-    <Route path="/settings"   element={<ProtectedRoute ownerOnly><Page><SettingsPage /></Page></ProtectedRoute>} />
+    <Route path="/settings"   element={<ProtectedRoute permKey="shareLinks"><Page><SettingsPage /></Page></ProtectedRoute>} />
     <Route path="*"           element={<Navigate to="/enquiries" replace />} />
   </Routes>
 )

@@ -19,6 +19,7 @@ export interface HCProfile {
   phone: string | null
   address: string | null
   gst_number: string | null
+  receipt_prefix: string | null
   logo_url: string | null
   is_super_admin: boolean
   margin_enabled: boolean
@@ -97,6 +98,7 @@ export interface HCEnquiry {
   amount_paid: number | null
   margin: number | null
   discount: number | null
+  lead_quality: 'good' | 'average' | 'poor' | null
   conversation_log: ConversationEntry[]
   notes: string | null
   created_by: string | null; updated_by: string | null
@@ -144,6 +146,16 @@ export interface HCPayment {
   recorded_by: string
   created_at: string
 }
+
+// ── Share links — revocable, no-login links for external stakeholders ──────
+export interface HCShareLink {
+  id: string; tenant_id: string
+  type: 'crm' | 'accounts'
+  created_by: string
+  revoked_at: string | null
+  last_accessed_at: string | null
+  created_at: string
+}
  
 // ── Status sort order ─────────────────────────────────────
 export const STATUS_ORDER: Record<string, number> = {
@@ -175,7 +187,7 @@ export const fmtShortDate = (d: string | null | undefined) => {
 }
 
 // ── Activity log ──────────────────────────────────────────
-export type HCActivityEntityType = 'enquiry' | 'income' | 'expense' | 'customer' | 'calendar_note' | 'employee' | 'business_profile' | 'inventory'
+export type HCActivityEntityType = 'enquiry' | 'income' | 'expense' | 'customer' | 'calendar_note' | 'employee' | 'business_profile' | 'inventory' | 'share_link'
 
 export interface HCActivityLog {
   id: string; tenant_id: string

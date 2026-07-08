@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase, HCEmployee, HCProfile, HCSubscriber, HCInventory, HCActivityLog, fmtDate, logActivity, getActor } from '../lib/supabase'
+import { supabase, HCEmployee, HCProfile, HCSubscriber, HCInventory, HCActivityLog, HCShareLink, fmtDate, logActivity, getActor } from '../lib/supabase'
 import { Eye, EyeOff } from 'lucide-react'
  
 const SUPABASE_URL = 'https://zecuxurmuydzlxsxasxq.supabase.co'
@@ -15,11 +15,13 @@ const PERM_LABELS = [
   { key:'calendar',  label:'Calendar' },
   { key:'customers', label:'Customers' },
   { key:'expenses',  label:'Expenses' },
+  { key:'shareLinks', label:'Share Links' },
 ]
- 
+
 const DEFAULT_PERMS = {
   dashboard: false, enquiries: true, income: true,
   calendar: true, customers: false, expenses: false,
+  shareLinks: false,
 }
  
 const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void; label: string }> = ({ value, onChange, label }) => (
@@ -33,21 +35,22 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void; label: 
 )
  
 export const Settings: React.FC = () => {
-  const { user, tenantId, profile, isOwner, refreshProfile } = useAuth()
+  const { user, tenantId, profile, isOwner, permissions, refreshProfile } = useAuth()
   const isSuperAdmin = !!(profile as HCProfile & { is_super_admin?: boolean })?.is_super_admin
-  const [section, setSection] = useState('business')
+  const [section, setSection] = useState(isOwner ? 'business' : 'shareLinks')
   const [toast, setToast] = useState('')
  
   const SECTIONS = [
-    { id:'business',   label:'Business profile' },
-    { id:'inventory',  label:'Property / Stay' },
-    { id:'employees',  label:'Employees' },
+    ...(isOwner ? [{ id:'business',   label:'Business profile' }] : []),
+    ...(isOwner ? [{ id:'inventory',  label:'Property / Stay' }] : []),
+    ...(isOwner ? [{ id:'employees',  label:'Employees' }] : []),
     ...(isOwner ? [{ id:'activity', label:'Activity log' }] : []),
+    ...(isOwner || permissions.shareLinks ? [{ id:'shareLinks', label:'Share Links' }] : []),
     ...(isSuperAdmin ? [{ id:'onboarding', label:'Onboarding' }] : []),
   ]
  
   // Business profile state
-  const [biz, setBiz] = useState({ business_name:'', owner_name:'', phone:'', address:'', gst_number:'', whatsapp_number:'' })
+  const [biz, setBiz] = useState({ business_name:'', owner_name:'', phone:'', address:'', gst_number:'', receipt_prefix:'', whatsapp_number:'' })
   const [savingBiz, setSavingBiz] = useState(false)
  
   // Employee state
@@ -129,6 +132,7 @@ export const Settings: React.FC = () => {
       phone:         profile.phone         || '',
       address:       profile.address       || '',
       gst_number:    profile.gst_number    || '',
+      receipt_prefix: profile.receipt_prefix || '',
       whatsapp_number: profile.whatsapp_number || '',
     })
     load()
@@ -137,6 +141,74 @@ export const Settings: React.FC = () => {
   useEffect(() => {
     if (section === 'onboarding') loadSubscribers()
   }, [section, loadSubscribers])
+
+  // ── Share Links ──────────────────────────────────────────
+  const [crmLink, setCrmLink] = useState<HCShareLink | null>(null)
+  const [loadingShareLinks, setLoadingShareLinks] = useState(false)
+  const [generatingLink, setGeneratingLink] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  const loadShareLinks = useCallback(async () => {
+    if (!tenantId) return
+    setLoadingShareLinks(true)
+    const { data } = await supabase.from('hc_share_links')
+      .select('*').eq('tenant_id', tenantId).eq('type', 'crm')
+      .is('revoked_at', null).order('created_at', { ascending: false }).limit(1).maybeSingle()
+    setCrmLink((data as HCShareLink) || null)
+    setLoadingShareLinks(false)
+  }, [tenantId])
+
+  useEffect(() => {
+    if (section === 'shareLinks') loadShareLinks()
+  }, [section, loadShareLinks])
+
+  const generateCrmLink = async () => {
+    if (!tenantId || !user) return
+    setGeneratingLink(true)
+    const { data, error } = await supabase.from('hc_share_links').insert({
+      tenant_id: tenantId, type: 'crm', created_by: user.id,
+    }).select('*').single()
+    if (!error && data) {
+      setCrmLink(data as HCShareLink)
+      const actor = getActor({ userId: user.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId, ...actor,
+        action: 'share_link_created', entityType: 'share_link',
+        description: `${actor.actorName} generated a CRM share link`,
+      })
+      showToast('Link generated')
+    } else {
+      showToast('Could not generate link — check your connection and try again')
+    }
+    setGeneratingLink(false)
+  }
+
+  const revokeCrmLink = async () => {
+    if (!crmLink || !user) return
+    if (!window.confirm('Revoke this link? Anyone using it will immediately lose access, and this exact link can never be reactivated — you would need to generate and share a new one.')) return
+    const { error } = await supabase.from('hc_share_links').update({ revoked_at: new Date().toISOString() }).eq('id', crmLink.id)
+    if (!error) {
+      const actor = getActor({ userId: user.id, isOwner, employeeName: null, ownerName: profile?.owner_name })
+      logActivity({
+        tenantId: tenantId || '', ...actor,
+        action: 'share_link_revoked', entityType: 'share_link',
+        description: `${actor.actorName} revoked the CRM share link`,
+      })
+      setCrmLink(null)
+      showToast('Link revoked')
+    } else {
+      showToast('Could not revoke link — check your connection and try again')
+    }
+  }
+
+  const shareLinkUrl = (id: string) => `${window.location.origin}/shared/${id}`
+
+  const copyCrmLink = () => {
+    if (!crmLink) return
+    navigator.clipboard.writeText(shareLinkUrl(crmLink.id))
+    setCopiedLink(true)
+    setTimeout(() => setCopiedLink(false), 2000)
+  }
 
   const loadActivityLog = useCallback(async () => {
     if (!tenantId) return
@@ -471,6 +543,13 @@ export const Settings: React.FC = () => {
             <input value={biz[k]} onChange={e => setBiz(b => ({ ...b, [k]: e.target.value }))} style={inp} />
           </div>
         ))}
+        <div>
+          <label style={lbl}>Receipt code</label>
+          <input value={biz.receipt_prefix} maxLength={6}
+            onChange={e => setBiz(b => ({ ...b, receipt_prefix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') }))}
+            placeholder="e.g. HIL" style={{ ...inp, textTransform:'uppercase' }} />
+          <div style={{ fontSize:'11px', color:'#9ca3af', marginTop:'4px' }}>Shown on your receipts, e.g. {biz.receipt_prefix ? `${biz.receipt_prefix}-RCP00001` : 'RCP00001'}. Optional — leave blank to keep plain numbers.</div>
+        </div>
         {profile?.whatsapp_crm_enabled && (
           <div>
             <label style={lbl}>WhatsApp Number</label>
@@ -831,6 +910,42 @@ export const Settings: React.FC = () => {
     </div>
   )
  
+  const renderShareLinks = () => (
+    <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+      <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
+        <div style={{ fontSize:'14px', fontWeight:500, color:'#111111', marginBottom:'4px' }}>CRM link</div>
+        <div style={{ fontSize:'12px', color:'#6b7280', marginBottom:'16px' }}>
+          A link anyone can open without logging in — for an ad agency or marketing person tracking lead results.
+          Shows only Name, Phone, Source, Status, Enquiry date, and Lead quality — no financial data, filterable by Day / Week / Month.
+        </div>
+
+        {loadingShareLinks ? (
+          <div style={{ fontSize:'12px', color:'#9ca3af' }}>Loading...</div>
+        ) : crmLink ? (
+          <div>
+            <div style={{ display:'flex', gap:'8px', alignItems:'center', marginBottom:'10px' }}>
+              <input readOnly value={shareLinkUrl(crmLink.id)} style={{ ...inp, flex:1, fontSize:'12px', color:'#374151', background:'#f9fafb' }} onFocus={e => e.target.select()} />
+              <button onClick={copyCrmLink} style={{ padding:'9px 16px', background: copiedLink ? '#dcfce7' : '#17341e', color: copiedLink ? '#166534' : '#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', whiteSpace:'nowrap' }}>
+                {copiedLink ? 'Copied ✓' : 'Copy link'}
+              </button>
+            </div>
+            <div style={{ fontSize:'11px', color:'#9ca3af', marginBottom:'14px' }}>
+              Created {fmtDate(crmLink.created_at)}
+              {crmLink.last_accessed_at ? ` · Last viewed ${fmtDate(crmLink.last_accessed_at)}` : ' · Not yet viewed'}
+            </div>
+            <button onClick={revokeCrmLink} style={{ padding:'8px 16px', background:'#fee2e2', color:'#991b1b', border:'1px solid #fca5a5', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer' }}>
+              Revoke link
+            </button>
+          </div>
+        ) : (
+          <button onClick={generateCrmLink} disabled={generatingLink} style={{ padding:'9px 20px', background:'#17341e', color:'#ffffff', border:'none', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:'pointer', opacity: generatingLink ? 0.7 : 1 }}>
+            {generatingLink ? 'Generating...' : '+ Generate CRM link'}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
   const renderOnboarding = () => (
     <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
       <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', padding:'20px 22px' }}>
@@ -1042,10 +1157,11 @@ export const Settings: React.FC = () => {
           ))}
         </div>
         <div className="page-content">
-          {section === 'business'   && renderBusiness()}
-          {section === 'inventory'  && renderInventory()}
-          {section === 'employees'  && renderEmployees()}
+          {section === 'business'   && isOwner && renderBusiness()}
+          {section === 'inventory'  && isOwner && renderInventory()}
+          {section === 'employees'  && isOwner && renderEmployees()}
           {section === 'activity'   && isOwner && renderActivity()}
+          {section === 'shareLinks' && (isOwner || permissions.shareLinks) && renderShareLinks()}
           {section === 'onboarding' && isSuperAdmin && renderOnboarding()}
         </div>
       </div>

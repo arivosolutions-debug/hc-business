@@ -20,6 +20,14 @@ const STATUS: Record<string, { label: string; bg: string; color: string }> = {
 // once a booking is fully paid and its check-out date has passed.
 const SELECTABLE_STATUS: Record<string, { label: string; bg: string; color: string }> =
   Object.fromEntries(Object.entries(STATUS).filter(([k]) => k !== 'completed'))
+
+// Internal-only rating — never shown as a column in the Enquiries table itself,
+// only fillable here and surfaced later on the CRM share link.
+const LEAD_QUALITY_OPTIONS: { key: string; label: string; bg: string; color: string }[] = [
+  { key:'good',    label:'Good',    bg:'#dcfce7', color:'#166534' },
+  { key:'average', label:'Average', bg:'#fef9c3', color:'#854f0b' },
+  { key:'poor',    label:'Poor',    bg:'#fee2e2', color:'#991b1b' },
+]
  
 const DEFAULT_SOURCES = ['WhatsApp DM','Instagram DM','Website form','Phone call','Walk-in','Referral','Other']
 const DEFAULT_PAYMENT_TYPES = ['UPI','Cash','Bank transfer','Cheque']
@@ -46,7 +54,7 @@ const BLANK = () => ({
   name:'', phone:'', email:'', source:'WhatsApp DM', status:'contacted',
   interest:'', check_in:'', check_out:'', guests:'1',
   total_price:'', amount_paid:'0', discount:'0', notes:'',
-  payment_type:'UPI',
+  payment_type:'UPI', lead_quality:'',
   enquiry_date: new Date().toISOString().slice(0, 10),
 })
  
@@ -515,6 +523,7 @@ export const Enquiries: React.FC = () => {
       amount_paid:  amountPaid,
       discount:     Math.max(0, parseFloat(addForm.discount) || 0),
       margin:       Math.max(0, (marginMap[addForm.interest] || 0) - (Math.max(0, parseFloat(addForm.discount) || 0))),
+      lead_quality: addForm.lead_quality || null,
       enquiry_date: addForm.enquiry_date || new Date().toISOString().slice(0, 10),
       conversation_log: [entry],
       created_by:   user.id,
@@ -594,6 +603,7 @@ export const Enquiries: React.FC = () => {
       amount_paid:  String(e.amount_paid || 0),
       discount:     String(e.discount || 0),
       payment_type: 'UPI',
+      lead_quality: e.lead_quality || '',
       enquiry_date: e.enquiry_date || e.created_at?.slice(0, 10) || '',
     }
     if (tenantId && user) {
@@ -764,6 +774,7 @@ export const Enquiries: React.FC = () => {
       amount_paid:  amountPaid,
       margin:       marginValue,
       discount:     discountValue,
+      lead_quality: editForm.lead_quality || null,
       enquiry_date: editForm.enquiry_date || null,
       updated_by:   user.id,
       updated_at:   new Date().toISOString(),
@@ -1257,6 +1268,19 @@ export const Enquiries: React.FC = () => {
                 ))}
               </div>
             </div>
+
+            {/* Lead quality — optional, internal-only rating; never shown in the Enquiries table */}
+            <div style={{ marginBottom:'10px' }}>
+              <label style={lbl}>Lead quality <span style={{ textTransform:'none', fontWeight:400, color:'#9ca3af' }}>(optional)</span></label>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px' }}>
+                {LEAD_QUALITY_OPTIONS.map(opt => (
+                  <button key={opt.key} onClick={() => setAddForm(f => ({ ...f, lead_quality: f.lead_quality === opt.key ? '' : opt.key }))}
+                    style={{ padding:'5px 12px', borderRadius:'20px', border:'1px solid', borderColor:addForm.lead_quality===opt.key?opt.color:'#e5e7eb', background:addForm.lead_quality===opt.key?opt.bg:'#ffffff', color:addForm.lead_quality===opt.key?opt.color:'#374151', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
  
             {/* Notes */}
             <div style={{ marginBottom:'14px' }}>
@@ -1569,6 +1593,19 @@ export const Enquiries: React.FC = () => {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Lead quality — optional, internal-only rating; never shown in the Enquiries table */}
+              <div style={{ marginBottom:'14px' }}>
+                <label style={{ ...lbl, color:'#9ca3af' }}>Lead quality <span style={{ textTransform:'none', fontWeight:400, color:'#9ca3af' }}>(optional)</span></label>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
+                  {LEAD_QUALITY_OPTIONS.map(opt => (
+                    <button key={opt.key} onClick={() => setEditForm(f => ({ ...f, lead_quality: f.lead_quality === opt.key ? '' : opt.key }))}
+                      style={{ padding:'5px 10px', borderRadius:'20px', border:'1px solid', borderColor:editForm.lead_quality===opt.key?opt.color:'#e5e7eb', background:editForm.lead_quality===opt.key?opt.bg:'#ffffff', color:editForm.lead_quality===opt.key?opt.color:'#374151', fontSize:'11px', fontWeight:500, cursor:'pointer' }}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
  
               {/* Conversation log */}

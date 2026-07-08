@@ -21,7 +21,7 @@ const ALL_NAV: NavItem[] = [
   { to: '/calendar',  icon: <CalendarDays size={15} />,    label: 'Calendar',  permKey: 'calendar'  },
   { to: '/customers', icon: <Users size={15} />,           label: 'Customers', permKey: 'customers' },
   { to: '/expenses',  icon: <TrendingDown size={15} />,    label: 'Expenses',  permKey: 'expenses', ownerOnly: false },
-  { to: '/settings',  icon: <Settings size={15} />,        label: 'Settings',  permKey: null, ownerOnly: true },
+  { to: '/settings',  icon: <Settings size={15} />,        label: 'Settings',  permKey: 'shareLinks' },
 ]
  
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
