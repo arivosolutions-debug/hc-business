@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import {
   LayoutDashboard, Users, TrendingUp, TrendingDown,
-  Settings, LogOut, Menu, X, CalendarDays, BookOpen,
+  Settings, LogOut, Menu, X, CalendarDays, BookOpen, Wallet,
 } from 'lucide-react'
  
 interface NavItem {
@@ -18,6 +18,7 @@ const ALL_NAV: NavItem[] = [
   { to: '/dashboard', icon: <LayoutDashboard size={15} />, label: 'Dashboard', permKey: 'dashboard' },
   { to: '/enquiries', icon: <BookOpen size={15} />,        label: 'Enquiries', permKey: 'enquiries' },
   { to: '/income',    icon: <TrendingUp size={15} />,      label: 'Income',    permKey: 'income'    },
+  { to: '/accounts', icon: <Wallet size={15} />, label: 'Accounts', permKey: 'accounts' },
   { to: '/calendar',  icon: <CalendarDays size={15} />,    label: 'Calendar',  permKey: 'calendar'  },
   { to: '/customers', icon: <Users size={15} />,           label: 'Customers', permKey: 'customers' },
   { to: '/expenses',  icon: <TrendingDown size={15} />,    label: 'Expenses',  permKey: 'expenses', ownerOnly: false },

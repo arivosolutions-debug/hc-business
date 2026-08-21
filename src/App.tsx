@@ -9,10 +9,11 @@ const Dashboard     = React.lazy(() => import('./pages/Dashboard'))
 const Enquiries     = React.lazy(() => import('./pages/Enquiries'))
 const CustomersPage = React.lazy(() => import('./pages/CustomersPage'))
 const Income        = React.lazy(() => import('./pages/Income'))
+const Accounts       = React.lazy(() => import('./pages/Accounts'))
 const Expenses      = React.lazy(() => import('./pages/Expenses'))
 const Calendar      = React.lazy(() => import('./pages/Calendar'))
 const SettingsPage  = React.lazy(() => import('./pages/Settings'))
-const SharedCRMReport = React.lazy(() => import('./pages/Sharedcrmreport.tsx'))
+const SharedCRMReport = React.lazy(() => import('./pages/SharedCRMReport'))
  
 const Loader = () => (
   <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f9fafb' }}>
@@ -54,6 +55,7 @@ const AppRoutes = () => (
     <Route path="/enquiries"  element={<ProtectedRoute permKey="enquiries"><Page><Enquiries /></Page></ProtectedRoute>} />
     <Route path="/customers"  element={<ProtectedRoute permKey="customers"><Page><CustomersPage /></Page></ProtectedRoute>} />
     <Route path="/income"     element={<ProtectedRoute permKey="income"><Page><Income /></Page></ProtectedRoute>} />
+    <Route path="/accounts"   element={<ProtectedRoute permKey="accounts"><Page><Accounts /></Page></ProtectedRoute>} />
     <Route path="/expenses"   element={<ProtectedRoute permKey="expenses"><Page><Expenses /></Page></ProtectedRoute>} />
     <Route path="/calendar"   element={<ProtectedRoute permKey="calendar"><Page><Calendar /></Page></ProtectedRoute>} />
     <Route path="/settings"   element={<ProtectedRoute permKey="shareLinks"><Page><SettingsPage /></Page></ProtectedRoute>} />

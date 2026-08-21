@@ -250,6 +250,12 @@ export const Income: React.FC = () => {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [drillLabel, setDrillLabel] = useState('')
+  // Calendar-day filter — reuses the exact same dateFrom/dateTo/drillLabel
+  // state as the Dashboard drill-down.
+  const [showCalendar, setShowCalendar] = useState(false)
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
   const [interests, setInterests]         = useState<string[]>([])
 
   // Apply drill-down filters passed in via navigation from the Dashboard (runs once on mount)
@@ -367,6 +373,18 @@ export const Income: React.FC = () => {
   const paginated   = sorted.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const confirmedTotal = filtered.filter(r => r.status === 'confirmed').reduce((s, r) => s + (r.advance_paid || 0), 0)
   const drafts      = filtered.filter(r => r.status === 'draft')
+
+  // Days in the currently-displayed calendar month that have at least one record —
+  // drawn from data already loaded in memory, no extra query needed.
+  const daysWithRecords = new Set(records.map(r => r.date).filter(Boolean))
+
+  const pickCalendarDay = (dateStr: string) => {
+    setDateFrom(dateStr)
+    setDateTo(dateStr)
+    setDrillLabel(new Date(dateStr + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' }))
+    setShowCalendar(false)
+    setCurrentPage(1)
+  }
  
   // ── Edit panel derived values ──────────────────────────────
   const totalPrice   = Number(editRecord?.enquiry?.total_price ?? editRecord?.amount ?? 0)
@@ -610,6 +628,63 @@ export const Income: React.FC = () => {
             <option value="">All statuses</option>
             {(Object.keys(STATUS_KEY_LABEL) as RecordStatusKey[]).map(k => <option key={k} value={k}>{STATUS_KEY_LABEL[k]}</option>)}
           </select>
+          <div style={{ position:'relative', flexShrink:0 }}>
+            <button onClick={() => setShowCalendar(v => !v)}
+              style={{ ...sel, display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', background: showCalendar ? '#f0fdf4' : '#ffffff', borderColor: showCalendar ? '#17341e' : '#e5e7eb', whiteSpace:'nowrap' }}>
+              📅 Pick a day
+            </button>
+            {showCalendar && (
+              <>
+                <div onClick={() => setShowCalendar(false)} style={{ position:'fixed', inset:0, zIndex:59 }} />
+                <div style={{ position:'absolute', top:'calc(100% + 6px)', left:0, zIndex:60, background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', boxShadow:'0 8px 24px rgba(0,0,0,0.12)', padding:'14px', width:'260px' }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'10px' }}>
+                    <button onClick={() => setCalendarMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                      style={{ background:'none', border:'none', cursor:'pointer', fontSize:'14px', color:'#374151', padding:'2px 6px' }}>‹</button>
+                    <span style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>
+                      {calendarMonth.toLocaleDateString('en-IN', { month:'long', year:'numeric' })}
+                    </span>
+                    <button onClick={() => setCalendarMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                      style={{ background:'none', border:'none', cursor:'pointer', fontSize:'14px', color:'#374151', padding:'2px 6px' }}>›</button>
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:'2px', marginBottom:'4px' }}>
+                    {['S','M','T','W','T','F','S'].map((d, i) => (
+                      <div key={i} style={{ textAlign:'center', fontSize:'10px', color:'#9ca3af', fontWeight:500, padding:'4px 0' }}>{d}</div>
+                    ))}
+                  </div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:'2px' }}>
+                    {(() => {
+                      const year = calendarMonth.getFullYear(), month = calendarMonth.getMonth()
+                      const firstWeekday = new Date(year, month, 1).getDay()
+                      const daysInMonth = new Date(year, month + 1, 0).getDate()
+                      const todayStr = new Date().toISOString().slice(0, 10)
+                      const cells = []
+                      for (let i = 0; i < firstWeekday; i++) cells.push(<div key={`pad-${i}`} />)
+                      for (let day = 1; day <= daysInMonth; day++) {
+                        const dateStr = `${year}-${String(month + 1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+                        const hasData = daysWithRecords.has(dateStr)
+                        const isToday = dateStr === todayStr
+                        const isSelected = dateStr === dateFrom && dateStr === dateTo
+                        cells.push(
+                          <button key={day} onClick={() => pickCalendarDay(dateStr)}
+                            style={{
+                              position:'relative', padding:'6px 0', border:'none', borderRadius:'6px', cursor:'pointer', fontSize:'11px',
+                              background: isSelected ? '#17341e' : isToday ? '#f0fdf4' : 'transparent',
+                              color: isSelected ? '#ffffff' : '#374151', fontWeight: isToday || isSelected ? 600 : 400,
+                            }}>
+                            {day}
+                            {hasData && !isSelected && (
+                              <span style={{ position:'absolute', bottom:'2px', left:'50%', transform:'translateX(-50%)', width:'3px', height:'3px', borderRadius:'50%', background:'#17341e' }} />
+                            )}
+                          </button>
+                        )
+                      }
+                      return cells
+                    })()}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
  

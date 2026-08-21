@@ -2,13 +2,13 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 
 const SUPABASE_URL = 'https://zecuxurmuydzlxsxasxq.supabase.co'
+const PAGE_SIZE = 50
 
 type RangeType = 'day' | 'week' | 'month' | 'all'
 
 interface SharedEnquiry {
   id: string
   name: string
-  phone: string | null
   source: string
   status: string
   enquiry_date: string | null
@@ -54,6 +54,10 @@ export const SharedCRMReport: React.FC = () => {
   const [data, setData] = useState<ReportResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [page, setPage] = useState(1)
+  const [filterStatus, setFilterStatus] = useState('')
+  const [filterSource, setFilterSource] = useState('')
+  const [filterQuality, setFilterQuality] = useState('')
 
   const load = useCallback(async () => {
     if (!token) return
@@ -75,6 +79,10 @@ export const SharedCRMReport: React.FC = () => {
   }, [token, range, refDate])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    setPage(1)
+    setFilterStatus(''); setFilterSource(''); setFilterQuality('')
+  }, [range, refDate])
 
   const rangeBtn = (r: RangeType, label: string) => (
     <button onClick={() => setRange(r)}
@@ -82,6 +90,18 @@ export const SharedCRMReport: React.FC = () => {
       {label}
     </button>
   )
+
+  const sourceOptions = data ? Array.from(new Set(data.enquiries.map(e => e.source))).sort() : []
+
+  const filteredEnquiries = (data?.enquiries || []).filter(e => {
+    if (filterStatus && e.status !== filterStatus) return false
+    if (filterSource && e.source !== filterSource) return false
+    if (filterQuality && e.lead_quality !== filterQuality) return false
+    return true
+  })
+
+  const totalPages = Math.ceil(filteredEnquiries.length / PAGE_SIZE)
+  const paginated = filteredEnquiries.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
     <div style={{ minHeight:'100vh', background:'#f9fafb', padding:'24px 16px', fontFamily:'system-ui, sans-serif' }}>
@@ -128,15 +148,39 @@ export const SharedCRMReport: React.FC = () => {
 
         {!loading && !error && data && (
           <div style={{ background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'12px', overflow:'hidden' }}>
-            {data.enquiries.length === 0 ? (
-              <div style={{ textAlign:'center', padding:'40px', color:'#9ca3af', fontSize:'13px' }}>No enquiries in this period.</div>
+            <div style={{ display:'flex', gap:'8px', padding:'14px 16px', borderBottom:'1px solid #f3f4f6', flexWrap:'wrap' }}>
+              <select value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1) }}
+                style={{ padding:'6px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#374151' }}>
+                <option value="">All statuses</option>
+                {Object.entries(STATUS_STYLE).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+              <select value={filterSource} onChange={e => { setFilterSource(e.target.value); setPage(1) }}
+                style={{ padding:'6px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#374151' }}>
+                <option value="">All sources</option>
+                {sourceOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <select value={filterQuality} onChange={e => { setFilterQuality(e.target.value); setPage(1) }}
+                style={{ padding:'6px 10px', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', color:'#374151' }}>
+                <option value="">All quality</option>
+                {Object.entries(QUALITY_STYLE).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+              {(filterStatus || filterSource || filterQuality) && (
+                <button onClick={() => { setFilterStatus(''); setFilterSource(''); setFilterQuality(''); setPage(1) }}
+                  style={{ fontSize:'11px', color:'#991b1b', background:'#fee2e2', border:'1px solid #fca5a5', borderRadius:'8px', padding:'6px 12px', cursor:'pointer' }}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+            {filteredEnquiries.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'40px', color:'#9ca3af', fontSize:'13px' }}>
+                {data.enquiries.length === 0 ? 'No enquiries in this period.' : 'No enquiries match these filters.'}
+              </div>
             ) : (
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse' }}>
                   <thead>
                     <tr style={{ background:'#f9fafb', borderBottom:'1px solid #e5e7eb' }}>
                       <th style={{ textAlign:'left', padding:'10px 14px', fontSize:'11px', color:'#6b7280', fontWeight:600 }}>Name</th>
-                      <th style={{ textAlign:'left', padding:'10px 14px', fontSize:'11px', color:'#6b7280', fontWeight:600 }}>Phone</th>
                       <th style={{ textAlign:'left', padding:'10px 14px', fontSize:'11px', color:'#6b7280', fontWeight:600 }}>Source</th>
                       <th style={{ textAlign:'left', padding:'10px 14px', fontSize:'11px', color:'#6b7280', fontWeight:600 }}>Status</th>
                       <th style={{ textAlign:'left', padding:'10px 14px', fontSize:'11px', color:'#6b7280', fontWeight:600 }}>Date</th>
@@ -145,13 +189,12 @@ export const SharedCRMReport: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.enquiries.map(e => {
+                    {paginated.map(e => {
                       const st = STATUS_STYLE[e.status] || { label: e.status, bg:'#f3f4f6', color:'#6b7280' }
                       const q = e.lead_quality ? QUALITY_STYLE[e.lead_quality] : null
                       return (
                         <tr key={e.id} style={{ borderBottom:'1px solid #f3f4f6' }}>
                           <td style={{ padding:'10px 14px', fontSize:'13px', color:'#111111' }}>{e.name}</td>
-                          <td style={{ padding:'10px 14px', fontSize:'13px', color:'#374151' }}>{e.phone || '—'}</td>
                           <td style={{ padding:'10px 14px', fontSize:'13px', color:'#374151' }}>{e.source}</td>
                           <td style={{ padding:'10px 14px' }}>
                             <span style={{ fontSize:'11px', padding:'3px 9px', borderRadius:'20px', fontWeight:500, background:st.bg, color:st.color }}>{st.label}</span>
@@ -174,6 +217,21 @@ export const SharedCRMReport: React.FC = () => {
                 </table>
               </div>
             )}
+          </div>
+        )}
+
+        {!loading && !error && data && totalPages > 1 && (
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 4px', marginTop:'10px', flexWrap:'wrap', gap:'8px' }}>
+            <span style={{ fontSize:'12px', color:'#9ca3af' }}>
+              Showing {((page-1)*PAGE_SIZE)+1}–{Math.min(page*PAGE_SIZE, filteredEnquiries.length)} of {filteredEnquiries.length}
+            </span>
+            <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
+              <button onClick={() => setPage(p => Math.max(1, p-1))} disabled={page===1}
+                style={{ padding:'6px 14px', background:'#ffffff', color:page===1?'#d1d5db':'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:page===1?'default':'pointer' }}>‹ Prev</button>
+              <span style={{ fontSize:'12px', color:'#374151', padding:'0 8px' }}>Page {page} of {totalPages}</span>
+              <button onClick={() => setPage(p => Math.min(totalPages, p+1))} disabled={page===totalPages}
+                style={{ padding:'6px 14px', background:'#ffffff', color:page===totalPages?'#d1d5db':'#111111', border:'1px solid #e5e7eb', borderRadius:'8px', fontSize:'12px', fontWeight:500, cursor:page===totalPages?'default':'pointer' }}>Next ›</button>
+            </div>
           </div>
         )}
 

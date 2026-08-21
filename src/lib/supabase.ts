@@ -139,7 +139,7 @@ export interface HCPayment {
   finance_id: string | null; enquiry_id: string | null
   receipt_number: string | null
   amount: number
-  kind: 'advance' | 'additional' | 'full' | 'refund'
+  kind: 'advance' | 'additional' | 'full' | 'refund' | 'correction'
   payment_type: string | null
   payment_date: string
   notes: string | null

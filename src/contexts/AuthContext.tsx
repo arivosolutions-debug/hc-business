@@ -10,6 +10,7 @@ export interface Permissions {
   customers: boolean
   expenses: boolean
   shareLinks: boolean
+  accounts: boolean
 }
  
 const DEFAULT_OWNER_PERMISSIONS: Permissions = {
@@ -20,6 +21,7 @@ const DEFAULT_OWNER_PERMISSIONS: Permissions = {
   customers: true,
   expenses: true,
   shareLinks: true,
+  accounts: true,
 }
  
 const DEFAULT_EMPLOYEE_PERMISSIONS: Permissions = {
@@ -30,6 +32,7 @@ const DEFAULT_EMPLOYEE_PERMISSIONS: Permissions = {
   customers: false,
   expenses: false,
   shareLinks: false,
+  accounts: false,
 }
  
 interface AuthContextType {

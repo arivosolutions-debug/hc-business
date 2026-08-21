@@ -105,6 +105,13 @@ export const Enquiries: React.FC = () => {
   const [checkOutFrom, setCheckOutFrom] = useState('')
   const [checkOutTo, setCheckOutTo] = useState('')
   const [drillLabel, setDrillLabel] = useState('')
+  // Calendar-day filter — a quick-pick calendar popover in the filter bar.
+  // Reuses the exact same enqDateFrom/enqDateTo/drillLabel state as the
+  // Dashboard drill-down, so clicking a day here behaves identically.
+  const [showCalendar, setShowCalendar] = useState(false)
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
   const [pendingOpenId, setPendingOpenId] = useState('')
   const [page, setPage] = useState(1)
  
@@ -359,6 +366,20 @@ export const Enquiries: React.FC = () => {
  
   const totalPages = Math.ceil(displayed.length / PAGE_SIZE)
   const paginated = displayed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  // Days in the currently-displayed calendar month that have at least one enquiry —
+  // drawn from data already loaded in memory, no extra query needed.
+  const daysWithEnquiries = new Set(
+    enquiries.map(e => e.enquiry_date || e.created_at?.slice(0, 10)).filter(Boolean)
+  )
+
+  const pickCalendarDay = (dateStr: string) => {
+    setEnqDateFrom(dateStr)
+    setEnqDateTo(dateStr)
+    setDrillLabel(new Date(dateStr + 'T12:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' }))
+    setShowCalendar(false)
+    resetPage()
+  }
  
   // ── Customer search (autofill) ─────────────────────────
   const searchCustomers = useCallback(async (q: string) => {
@@ -665,16 +686,11 @@ export const Enquiries: React.FC = () => {
     setPanel(null)
   }
 
-  // Additional-payment rows — always at least one. Editing them adds on top of
-  // whatever was already paid before this edit; editForm.amount_paid is kept in
-  // sync as (already paid + these rows), so it always reflects the real new total.
+  // Additional-payment rows — always at least one. These represent genuinely
+  // NEW money coming in during this edit, added on top of "Already paid" (which
+  // is independently editable below, for correcting a mistake in the record).
   const updateEditSplit = (i: number, field: 'amount' | 'payment_type', value: string) => {
-    setEditPaymentSplits(prev => {
-      const next = prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp)
-      const addedNow = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
-      setEditForm(f => ({ ...f, amount_paid: String((panel?.amount_paid || 0) + addedNow), payment_type: next[0].payment_type }))
-      return next
-    })
+    setEditPaymentSplits(prev => prev.map((sp, idx) => idx === i ? { ...sp, [field]: value } : sp))
   }
   const addMoreEditSplitRow = () => {
     setEditPaymentSplits(prev => {
@@ -684,13 +700,7 @@ export const Enquiries: React.FC = () => {
     })
   }
   const removeEditSplitRow = (i: number) => {
-    setEditPaymentSplits(prev => {
-      if (prev.length <= 1) return prev // always keep at least one row
-      const next = prev.filter((_, idx) => idx !== i)
-      const addedNow = next.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
-      setEditForm(f => ({ ...f, amount_paid: String((panel?.amount_paid || 0) + addedNow), payment_type: next[0].payment_type }))
-      return next
-    })
+    setEditPaymentSplits(prev => prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i))
   }
 
   // ── Save edit panel ────────────────────────────────────
@@ -704,7 +714,9 @@ export const Enquiries: React.FC = () => {
     }
 
     const totalPrice  = Math.max(0, parseFloat(editForm.total_price) || 0)
-    const amountPaid  = Math.max(0, parseFloat(editForm.amount_paid) || 0)
+    const alreadyPaidBase = Math.max(0, parseFloat(editForm.amount_paid) || 0)
+    const splitsTotal = editPaymentSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
+    const amountPaid  = alreadyPaidBase + splitsTotal
     const discountValue = Math.max(0, parseFloat(editForm.discount) || 0)
     const marginValue   = Math.max(0, (marginMap[editForm.interest] || 0) - discountValue)
     const isFullyPaid = totalPrice > 0 && amountPaid >= totalPrice
@@ -866,10 +878,13 @@ export const Enquiries: React.FC = () => {
       }
     }
  
-    // Sync the linked income record — fires whenever a genuine payment increase
-    // happens through this panel, not just the first time an enquiry becomes Booked.
-    // Payment recording always goes through the ledger; this never writes
-    // advance_paid/balance_due/status directly — the recompute trigger does that.
+    // Sync the linked income record — fires for any Booked or Completed enquiry.
+    // Two independent things can happen here, and they're handled differently:
+    //  - "Additional payment now" rows are genuinely NEW money — always go
+    //    through the ledger as real payment entries.
+    //  - Editing "Already paid" directly is a correction to the record (fixing
+    //    a mistake), not a new payment — recorded as its own 'correction' ledger
+    //    entry so the total stays accurate without pretending money moved.
     const { data: existingFinance } = await supabase
       .from('hc_finance')
       .select('id, advance_paid')
@@ -878,9 +893,9 @@ export const Enquiries: React.FC = () => {
       .eq('type', 'income')
       .maybeSingle()
 
-    const paidIncrease = amountPaid - prevPaid
+    const correctionDelta = alreadyPaidBase - prevPaid
 
-    if (finalStatus === 'booked') {
+    if (finalStatus === 'booked' || finalStatus === 'completed') {
       let financeId = existingFinance?.id as string | undefined
 
       if (!financeId) {
@@ -905,15 +920,33 @@ export const Enquiries: React.FC = () => {
         await supabase.from('hc_finance').update({ amount: totalPrice }).eq('id', financeId)
       }
 
-      if (paidIncrease > 0 && financeId) {
+      const ledgerRows: { tenant_id: string; finance_id: string; enquiry_id: string; amount: number; kind: string; payment_type: string | null; payment_date: string; notes?: string; recorded_by: string }[] = []
+      const today = new Date().toISOString().slice(0, 10)
+
+      if (splitsTotal > 0 && financeId) {
         const kind: 'advance' | 'additional' | 'full' = isFullyPaid ? 'full' : (prevPaid <= 0 ? 'advance' : 'additional')
-        const today = new Date().toISOString().slice(0, 10)
-        const rows = editPaymentSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0).map(sp => ({
-          tenant_id: panel.tenant_id, finance_id: financeId, enquiry_id: panel.id,
-          amount: parseFloat(sp.amount) || 0, kind, payment_type: sp.payment_type,
-          payment_date: today, recorded_by: user.id,
-        }))
-        await supabase.from('hc_payments').insert(rows)
+        editPaymentSplits.filter(sp => (parseFloat(sp.amount) || 0) > 0).forEach(sp => {
+          ledgerRows.push({
+            tenant_id: panel.tenant_id, finance_id: financeId as string, enquiry_id: panel.id,
+            amount: parseFloat(sp.amount) || 0, kind, payment_type: sp.payment_type,
+            payment_date: today, recorded_by: user.id,
+          })
+        })
+      }
+
+      if (correctionDelta !== 0 && financeId) {
+        ledgerRows.push({
+          tenant_id: panel.tenant_id, finance_id: financeId as string, enquiry_id: panel.id,
+          amount: correctionDelta, kind: 'correction', payment_type: null,
+          payment_date: today, notes: 'Manual correction to Already Paid', recorded_by: user.id,
+        })
+      }
+
+      if (ledgerRows.length > 0) {
+        await supabase.from('hc_payments').insert(ledgerRows)
+      }
+
+      if (splitsTotal > 0 || correctionDelta !== 0) {
         showToast((isFullyPaid ? 'Saved · Income confirmed — fully paid' : existingFinance ? 'Changes saved · Draft income updated' : 'Saved · Draft income created') + (autoPromoted ? ' · Automatically marked as Booked' : ''))
       } else {
         showToast('Changes saved' + (autoPromoted ? ' · Automatically marked as Booked' : ''))
@@ -1041,6 +1074,63 @@ export const Enquiries: React.FC = () => {
           <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setFilterMonth(''); resetPage() }} style={{ ...sel, fontSize:'12px', padding:'6px 8px' }} />
           <span style={{ fontSize:'11px', color:'#9ca3af' }}>to</span>
           <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setFilterMonth(''); resetPage() }} style={{ ...sel, fontSize:'12px', padding:'6px 8px' }} />
+        </div>
+        <div style={{ position:'relative' }}>
+          <button onClick={() => setShowCalendar(v => !v)}
+            style={{ ...sel, display:'flex', alignItems:'center', gap:'6px', cursor:'pointer', background: showCalendar ? '#f0fdf4' : '#ffffff', borderColor: showCalendar ? '#17341e' : '#e5e7eb' }}>
+            📅 Pick a day
+          </button>
+          {showCalendar && (
+            <>
+              <div onClick={() => setShowCalendar(false)} style={{ position:'fixed', inset:0, zIndex:59 }} />
+              <div style={{ position:'absolute', top:'calc(100% + 6px)', left:0, zIndex:60, background:'#ffffff', border:'1px solid #e5e7eb', borderRadius:'10px', boxShadow:'0 8px 24px rgba(0,0,0,0.12)', padding:'14px', width:'260px' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'10px' }}>
+                  <button onClick={() => setCalendarMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                    style={{ background:'none', border:'none', cursor:'pointer', fontSize:'14px', color:'#374151', padding:'2px 6px' }}>‹</button>
+                  <span style={{ fontSize:'12px', fontWeight:500, color:'#111111' }}>
+                    {calendarMonth.toLocaleDateString('en-IN', { month:'long', year:'numeric' })}
+                  </span>
+                  <button onClick={() => setCalendarMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                    style={{ background:'none', border:'none', cursor:'pointer', fontSize:'14px', color:'#374151', padding:'2px 6px' }}>›</button>
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:'2px', marginBottom:'4px' }}>
+                  {['S','M','T','W','T','F','S'].map((d, i) => (
+                    <div key={i} style={{ textAlign:'center', fontSize:'10px', color:'#9ca3af', fontWeight:500, padding:'4px 0' }}>{d}</div>
+                  ))}
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:'2px' }}>
+                  {(() => {
+                    const year = calendarMonth.getFullYear(), month = calendarMonth.getMonth()
+                    const firstWeekday = new Date(year, month, 1).getDay()
+                    const daysInMonth = new Date(year, month + 1, 0).getDate()
+                    const todayStr = new Date().toISOString().slice(0, 10)
+                    const cells = []
+                    for (let i = 0; i < firstWeekday; i++) cells.push(<div key={`pad-${i}`} />)
+                    for (let day = 1; day <= daysInMonth; day++) {
+                      const dateStr = `${year}-${String(month + 1).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+                      const hasData = daysWithEnquiries.has(dateStr)
+                      const isToday = dateStr === todayStr
+                      const isSelected = dateStr === enqDateFrom && dateStr === enqDateTo
+                      cells.push(
+                        <button key={day} onClick={() => pickCalendarDay(dateStr)}
+                          style={{
+                            position:'relative', padding:'6px 0', border:'none', borderRadius:'6px', cursor:'pointer', fontSize:'11px',
+                            background: isSelected ? '#17341e' : isToday ? '#f0fdf4' : 'transparent',
+                            color: isSelected ? '#ffffff' : '#374151', fontWeight: isToday || isSelected ? 600 : 400,
+                          }}>
+                          {day}
+                          {hasData && !isSelected && (
+                            <span style={{ position:'absolute', bottom:'2px', left:'50%', transform:'translateX(-50%)', width:'3px', height:'3px', borderRadius:'50%', background:'#17341e' }} />
+                          )}
+                        </button>
+                      )
+                    }
+                    return cells
+                  })()}
+                </div>
+              </div>
+            </>
+          )}
         </div>
         {(filterStatus || filterSource || filterMonth !== '' || dateFrom || dateTo) && (
           <button onClick={() => { setFilterStatus(''); setFilterSource(''); setFilterMonth(''); setDateFrom(''); setDateTo(''); resetPage() }}
@@ -1525,8 +1615,8 @@ export const Enquiries: React.FC = () => {
                     <input type="number" min="0" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
                   </div>
                   <div>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Already paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(before this edit)</span></label>
-                    <input type="number" value={panel?.amount_paid || 0} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Already paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(correct here if wrong)</span></label>
+                    <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
                   </div>
                   <div>
                     <label style={{ ...lbl, color:'#9ca3af' }}>Discount ₹</label>
@@ -1539,7 +1629,7 @@ export const Enquiries: React.FC = () => {
                       }} style={inp} />
                   </div>
                   <div style={{ gridColumn:'span 2' }}>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Additional payment now ₹</label>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Additional payment now ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(genuinely new money — recorded in the ledger)</span></label>
                     {editPaymentSplits.map((sp, i) => (
                       <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
                         <input type="number" min="0" placeholder="0" value={sp.amount} onChange={e => updateEditSplit(i, 'amount', e.target.value)}
@@ -1557,13 +1647,13 @@ export const Enquiries: React.FC = () => {
                     </button>
                     <div style={{ marginTop:'8px' }}>
                       <label style={{ ...lbl, color:'#9ca3af' }}>New total paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(auto-calculated)</span></label>
-                      <input type="number" value={editForm.amount_paid} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
+                      <input type="number" value={(parseFloat(editForm.amount_paid) || 0) + editPaymentSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
                     </div>
                   </div>
                 </div>
                 {(() => {
                   const total   = parseFloat(editForm.total_price) || 0
-                  const paid    = parseFloat(editForm.amount_paid) || 0
+                  const paid    = (parseFloat(editForm.amount_paid) || 0) + editPaymentSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)
                   const balance = Math.max(0, total - paid)
                   const fullyPaid = total > 0 && paid >= total
                   return total > 0 ? (

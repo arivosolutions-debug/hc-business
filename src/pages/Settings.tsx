@@ -16,12 +16,13 @@ const PERM_LABELS = [
   { key:'customers', label:'Customers' },
   { key:'expenses',  label:'Expenses' },
   { key:'shareLinks', label:'Share Links' },
+  { key:'accounts',  label:'Accounts' },
 ]
 
 const DEFAULT_PERMS = {
   dashboard: false, enquiries: true, income: true,
   calendar: true, customers: false, expenses: false,
-  shareLinks: false,
+  shareLinks: false, accounts: false,
 }
  
 const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void; label: string }> = ({ value, onChange, label }) => (
