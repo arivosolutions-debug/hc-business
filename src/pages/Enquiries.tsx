@@ -1615,7 +1615,7 @@ export const Enquiries: React.FC = () => {
                     <input type="number" min="0" value={editForm.total_price} onChange={e => setEditForm(f => ({ ...f, total_price: e.target.value }))} style={inp} />
                   </div>
                   <div>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Already paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(correct here if wrong)</span></label>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Already paid ₹</label>
                     <input type="number" min="0" value={editForm.amount_paid} onChange={e => setEditForm(f => ({ ...f, amount_paid: e.target.value }))} style={inp} />
                   </div>
                   <div>
@@ -1629,7 +1629,7 @@ export const Enquiries: React.FC = () => {
                       }} style={inp} />
                   </div>
                   <div style={{ gridColumn:'span 2' }}>
-                    <label style={{ ...lbl, color:'#9ca3af' }}>Additional payment now ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(genuinely new money — recorded in the ledger)</span></label>
+                    <label style={{ ...lbl, color:'#9ca3af' }}>Additional payment now ₹</label>
                     {editPaymentSplits.map((sp, i) => (
                       <div key={sp.id} style={{ display:'flex', gap:'6px', marginBottom:'6px' }}>
                         <input type="number" min="0" placeholder="0" value={sp.amount} onChange={e => updateEditSplit(i, 'amount', e.target.value)}
@@ -1646,7 +1646,7 @@ export const Enquiries: React.FC = () => {
                       + Add another payment method
                     </button>
                     <div style={{ marginTop:'8px' }}>
-                      <label style={{ ...lbl, color:'#9ca3af' }}>New total paid ₹ <span style={{ textTransform:'none', fontWeight:400, fontSize:'9px', color:'#9ca3af' }}>(auto-calculated)</span></label>
+                      <label style={{ ...lbl, color:'#9ca3af' }}>New total paid ₹</label>
                       <input type="number" value={(parseFloat(editForm.amount_paid) || 0) + editPaymentSplits.reduce((s, sp) => s + (parseFloat(sp.amount) || 0), 0)} readOnly style={{ ...inp, background:'#f3f4f6', color:'#6b7280' }} />
                     </div>
                   </div>
